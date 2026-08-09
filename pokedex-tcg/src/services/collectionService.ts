@@ -9,6 +9,19 @@ import {
 import { db } from '@/lib/firebase';
 import type { OwnedCard, UserSettings, WishlistItem } from '@/types';
 
+/**
+ * O Firestore REJEITA campos com valor undefined — não ignora, lança erro.
+ * Cartas sem artista, HP ou tipo (Treinador, Energia, dados faltando na API)
+ * derrubavam a gravação inteira, e o botão de adicionar ficava mudo.
+ */
+function semUndefined<T extends Record<string, any>>(obj: T): T {
+  const saida: Record<string, any> = {};
+  for (const [chave, valor] of Object.entries(obj)) {
+    if (valor !== undefined) saida[chave] = valor;
+  }
+  return saida as T;
+}
+
 const cardsRef = (uid: string) => collection(db, 'users', uid, 'cards');
 const wishlistRef = (uid: string) => collection(db, 'users', uid, 'wishlist');
 const userRef = (uid: string) => doc(db, 'users', uid);
@@ -56,12 +69,12 @@ export async function addCards(
   }
 
   const ref = doc(cardsRef(uid));
-  await setDoc(ref, card);
+  await setDoc(ref, semUndefined(card));
   return ref.id;
 }
 
 export async function updateCard(uid: string, cardId: string, patch: Partial<OwnedCard>) {
-  await updateDoc(doc(cardsRef(uid), cardId), { ...patch, updatedAt: Date.now() });
+  await updateDoc(doc(cardsRef(uid), cardId), semUndefined({ ...patch, updatedAt: Date.now() }));
 }
 
 export async function removeCard(uid: string, cardId: string) {
@@ -69,7 +82,7 @@ export async function removeCard(uid: string, cardId: string) {
 }
 
 export async function addToWishlist(uid: string, item: Omit<WishlistItem, 'id'>) {
-  await setDoc(doc(wishlistRef(uid)), item);
+  await setDoc(doc(wishlistRef(uid)), semUndefined(item));
 }
 
 export async function removeFromWishlist(uid: string, itemId: string) {
@@ -97,7 +110,7 @@ export async function saveSettings(uid: string, settings: Partial<UserSettings>)
 export async function importCards(uid: string, cards: Omit<OwnedCard, 'id'>[]) {
   for (let i = 0; i < cards.length; i += 400) {
     const batch = writeBatch(db);
-    cards.slice(i, i + 400).forEach((c) => batch.set(doc(cardsRef(uid)), c));
+    cards.slice(i, i + 400).forEach((c) => batch.set(doc(cardsRef(uid)), semUndefined(c)));
     await batch.commit();
   }
 }

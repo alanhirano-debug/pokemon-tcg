@@ -5,7 +5,7 @@ import { CollectionProvider } from '@/contexts/CollectionContext';
 import { AddCardPage } from '@/pages/AddCardPage';
 import { CollectionsPage } from '@/pages/CollectionsPage';
 import { LoginPage } from '@/pages/LoginPage';
-import { MyCardsPage } from '@/pages/MyCardsPage';
+import { AlbumPage } from '@/pages/AlbumPage';
 import { PokedexPage } from '@/pages/PokedexPage';
 import { PokemonDetailPage } from '@/pages/PokemonDetailPage';
 import { SettingsPage } from '@/pages/SettingsPage';
@@ -46,7 +46,8 @@ function Gate() {
           <Route index element={<PokedexPage />} />
           <Route path="pokemon/:id" element={<PokemonDetailPage />} />
           <Route path="colecoes" element={<CollectionsPage />} />
-          <Route path="cartas" element={<MyCardsPage />} />
+          <Route path="album" element={<AlbumPage />} />
+          <Route path="cartas" element={<Navigate to="/album" replace />} />
           <Route path="adicionar" element={<AddCardPage />} />
           <Route path="wishlist" element={<WishlistPage />} />
           <Route path="estatisticas" element={<StatsPage />} />

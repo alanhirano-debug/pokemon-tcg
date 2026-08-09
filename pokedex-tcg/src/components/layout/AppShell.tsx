@@ -7,7 +7,7 @@ import { useAuth } from '@/contexts/AuthContext';
 const NAV = [
   { to: '/', label: 'Pokédex', icon: LayoutGrid, end: true },
   { to: '/colecoes', label: 'Coleções', icon: Library },
-  { to: '/cartas', label: 'Minhas cartas', icon: Star },
+  { to: '/album', label: 'Álbum', icon: Star },
   { to: '/wishlist', label: 'Wishlist', icon: Heart },
   { to: '/estatisticas', label: 'Estatísticas', icon: BarChart3 },
   { to: '/configuracoes', label: 'Configurações', icon: Settings },

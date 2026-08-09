@@ -2,7 +2,6 @@
 // Docs: https://docs.pokemontcg.io
 
 import type { OwnedCard, PokemonType, TcgSet } from '@/types';
-import { FALLBACK_RATES, convert, type Rates } from './exchange';
 
 const BASE = 'https://api.pokemontcg.io/v2';
 const KEY = import.meta.env.VITE_POKEMONTCG_API_KEY;
@@ -126,14 +125,16 @@ export async function listSets(): Promise<TcgSet[]> {
   }));
 }
 
-/** Converte a resposta da API no formato que gravamos no Firestore. */
+/**
+ * Converte a resposta da API no formato gravado no Firestore.
+ * O preço NÃO vem da API: o valor é digitado por quem cadastra, porque a
+ * cotação internacional não reflete o mercado brasileiro.
+ */
 export function toOwnedCard(
   card: TcgCard,
   overrides: Partial<OwnedCard> = {},
-  rates: Rates = FALLBACK_RATES,
 ): Omit<OwnedCard, 'id'> {
   const now = Date.now();
-  const price = cardPrice(card);
   return {
     tcgId: card.id,
     pokedexId: card.nationalPokedexNumbers?.[0] ?? 0,
@@ -154,9 +155,7 @@ export function toOwnedCard(
     isHolo: /holo/i.test(card.rarity ?? ''),
     isReverse: false,
     isFirstEdition: false,
-    unitPrice: price ? convert(price.amount, price.currency, rates) : 0,
-    priceOrigin: price?.amount,
-    priceCurrency: price?.currency,
+    unitPrice: 0,
     priceUpdatedAt: now,
     favorite: false,
     createdAt: now,

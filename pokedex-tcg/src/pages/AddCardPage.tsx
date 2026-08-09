@@ -14,7 +14,7 @@ type Step = 'buscar' | 'picking' | 'confirm' | 'done';
 
 export function AddCardPage() {
   const { user } = useAuth();
-  const { cards, pokedex, settings, fx } = useCollection();
+  const { cards, pokedex, settings } = useCollection();
   const navigate = useNavigate();
 
   const [step, setStep] = useState<Step>('buscar');
@@ -29,6 +29,9 @@ export function AddCardPage() {
   const [condition, setCondition] = useState<CardCondition>('NM');
   const [language, setLanguage] = useState<CardLanguage>('PT');
   const [isReverse, setIsReverse] = useState(false);
+  const [valor, setValor] = useState('');
+  const [salvando, setSalvando] = useState(false);
+  const [erroSalvar, setErroSalvar] = useState<string | null>(null);
 
   // Guarda o status ANTES de gravar — depois do addCards a assinatura do
   // Firestore atualiza `cards` e o Pokémon deixaria de parecer inédito.
@@ -41,6 +44,9 @@ export function AddCardPage() {
   const copiesOfPokemon = ownedOfPokemon.reduce((sum, c) => sum + c.quantity, 0);
   const isNewToDex = pokedexId > 0 && ownedOfPokemon.length === 0;
   const hasNoDexEntry = Boolean(selected) && pokedexId === 0;
+
+  // Coleções onde o usuário já tem cartas — sobem para o topo da lista.
+  const colecoesUsadas = [...new Set(cards.map((c) => c.setId))];
 
   function handleResults(resultados: TcgCard[], termo: string) {
     if (resultados.length === 0) {
@@ -73,17 +79,37 @@ export function AddCardPage() {
   }
 
   async function confirmAdd() {
-    if (!user || !selected) return;
-    const payload = toOwnedCard(selected, { quantity, condition, language, isReverse }, fx);
-    setWasNewToDex(isNewToDex);
-    await addCards(user.uid, payload, cards);
-    setStep('done');
+    if (!user || !selected || salvando) return;
+
+    setSalvando(true);
+    setErroSalvar(null);
+
+    try {
+      const unitPrice = Number(valor.replace(',', '.')) || 0;
+      const payload = toOwnedCard(selected, {
+        quantity, condition, language, isReverse, unitPrice,
+      });
+      setWasNewToDex(isNewToDex);
+      await addCards(user.uid, payload, cards);
+      setStep('done');
+    } catch (err: any) {
+      // Antes isso falhava em silêncio e o botão parecia travado.
+      setErroSalvar(
+        err?.code === 'permission-denied'
+          ? 'O Firestore recusou a gravação. Confira se as regras do arquivo firestore.rules foram publicadas no console do Firebase.'
+          : `Não consegui salvar: ${err?.message ?? 'erro desconhecido'}`,
+      );
+    } finally {
+      setSalvando(false);
+    }
   }
 
   function restart() {
     setSelected(null);
     setMatches([]);
     setQuantity(1);
+    setValor('');
+    setErroSalvar(null);
     setStatus(null);
     setWasNewToDex(false);
     setStep('buscar');
@@ -101,6 +127,7 @@ export function AddCardPage() {
         <BuscaPorNumero
           onResultados={handleResults}
           onErro={(mensagem) => setStatus(mensagem)}
+          colecoesUsadas={colecoesUsadas}
         />
 
         {status && <p className="text-center text-sm text-gold">{status}</p>}
@@ -157,7 +184,7 @@ export function AddCardPage() {
 
   // ── Passo 3: confirmar e definir quantidade ─────────────
   if (step === 'confirm' && selected) {
-    const unit = toOwnedCard(selected, {}, fx).unitPrice;
+    const unit = Number(valor.replace(',', '.')) || 0;
     return (
       <div className="mx-auto max-w-md space-y-4">
         <Header title="Carta identificada" hint="Confira os dados e diga quantas cópias você tem." />
@@ -180,12 +207,7 @@ export function AddCardPage() {
             <p className="font-display text-lg font-bold">{selected.name}</p>
             <p className="text-sm text-mist">{selected.set.name}</p>
             <p className="text-sm text-mist">{selected.number}/{selected.set.printedTotal} · {selected.rarity ?? 'Comum'}</p>
-            <p className="mt-2 font-display font-bold text-flame">{brl(unit)}</p>
-            <p className="text-[11px] text-mist">
-              {fx.live
-                ? `convertido pelo dólar de hoje (R$ ${fx.usd.toFixed(2)})`
-                : `dólar de referência (R$ ${fx.usd.toFixed(2)})`}
-            </p>
+            <p className="mt-2 text-[11px] text-mist">{selected.artist ? `Ilustração: ${selected.artist}` : ''}</p>
           </div>
         </div>
 
@@ -203,6 +225,25 @@ export function AddCardPage() {
             </div>
           </div>
 
+          <div>
+            <label className="mb-1.5 block text-[11px] uppercase tracking-wider text-mist">
+              Valor unitário (opcional)
+            </label>
+            <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-ink-800 px-3">
+              <span className="text-sm text-mist">R$</span>
+              <input
+                value={valor}
+                onChange={(e) => setValor(e.target.value.replace(/[^0-9.,]/g, ''))}
+                inputMode="decimal"
+                placeholder="0,00"
+                className="w-full bg-transparent py-2.5 text-sm outline-none"
+              />
+            </div>
+            <p className="mt-1 text-[11px] text-mist">
+              Deixe em branco se ainda não sabe. Dá para preencher depois na página do Pokémon.
+            </p>
+          </div>
+
           <Select label="Condição" value={condition} onChange={(v) => setCondition(v as CardCondition)} options={CONDITION_LABEL} />
           <Select label="Idioma" value={language} onChange={(v) => setLanguage(v as CardLanguage)} options={LANGUAGE_LABEL} />
 
@@ -211,17 +252,26 @@ export function AddCardPage() {
             Reverse holo
           </label>
 
-          <div className="flex items-center justify-between border-t border-white/[0.07] pt-3 text-sm">
-            <span className="text-mist">Valor somado</span>
-            <span className="font-display text-lg font-bold text-flame">{brl(unit * quantity)}</span>
-          </div>
+          {unit > 0 && (
+            <div className="flex items-center justify-between border-t border-white/[0.07] pt-3 text-sm">
+              <span className="text-mist">Valor somado</span>
+              <span className="font-display text-lg font-bold text-flame">{brl(unit * quantity)}</span>
+            </div>
+          )}
         </div>
+
+        {erroSalvar && (
+          <p className="rounded-xl border border-flame/40 bg-flame/10 p-3 text-sm text-flame">
+            {erroSalvar}
+          </p>
+        )}
 
         <button
           onClick={confirmAdd}
-          className="w-full rounded-xl bg-flame py-3 font-display font-bold shadow-glow transition hover:bg-flame-soft"
+          disabled={salvando}
+          className="w-full rounded-xl bg-flame py-3 font-display font-bold shadow-glow transition hover:bg-flame-soft disabled:opacity-50"
         >
-          Adicionar à coleção
+          {salvando ? 'Salvando…' : 'Adicionar à coleção'}
         </button>
         <button onClick={restart} className="mx-auto flex items-center gap-1.5 text-sm text-mist hover:text-white">
           <RotateCcw size={14} /> Buscar outra
