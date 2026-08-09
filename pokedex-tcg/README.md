@@ -95,6 +95,10 @@ A PokéAPI não pede chave.
 
 **Netlify** — conecte o repositório do GitHub. O `netlify.toml` já define build (`npm run build`), pasta (`dist`) e o redirect de SPA. Adicione as variáveis `VITE_*` em *Site settings → Environment variables*.
 
+**GitHub Pages** — o arquivo `.github/workflows/deploy.yml` já faz tudo. Ative em *Settings → Pages → Source: **GitHub Actions*** e cadastre as variáveis em *Settings → Secrets and variables → Actions*, com os mesmos nomes do `.env`. A partir daí, cada push compila e publica sozinho.
+
+> O Pages **não compila** projeto Vite por conta própria. Mandar o código-fonte novo sem esse workflow deixa o site servindo o build antigo — o sintoma é o app não mudar depois do push.
+
 **Vercel** — importe o repositório; o Vite é detectado sozinho. Adicione as mesmas variáveis em *Settings → Environment variables*.
 
 Depois disso, cada `git push` na branch principal republica o site.
