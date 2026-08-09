@@ -1,9 +1,8 @@
 // Exportação e backup. Tudo roda no navegador — nada sai para servidor.
 
-import Papa from 'papaparse';
-import * as XLSX from 'xlsx';
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
+// As bibliotecas de planilha e PDF somam vários megabytes e quase nunca
+// são usadas. Elas entram por import dinâmico, no clique do botão — assim
+// não pesam no carregamento do app.
 import type { OwnedCard } from '@/types';
 import { CONDITION_LABEL, LANGUAGE_LABEL, brl } from '@/lib/format';
 
@@ -34,19 +33,23 @@ function download(blob: Blob, filename: string) {
 
 const stamp = () => new Date().toISOString().slice(0, 10);
 
-export function exportCSV(cards: OwnedCard[]) {
+export async function exportCSV(cards: OwnedCard[]) {
+  const { default: Papa } = await import('papaparse');
   const csv = Papa.unparse(rows(cards));
   download(new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' }), `colecao-${stamp()}.csv`);
 }
 
-export function exportXLSX(cards: OwnedCard[]) {
+export async function exportXLSX(cards: OwnedCard[]) {
+  const XLSX = await import('xlsx');
   const sheet = XLSX.utils.json_to_sheet(rows(cards));
   const book = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(book, sheet, 'Coleção');
   XLSX.writeFile(book, `colecao-${stamp()}.xlsx`);
 }
 
-export function exportPDF(cards: OwnedCard[]) {
+export async function exportPDF(cards: OwnedCard[]) {
+  const { default: jsPDF } = await import('jspdf');
+  const { default: autoTable } = await import('jspdf-autotable');
   const doc = new jsPDF({ orientation: 'landscape' });
   const total = cards.reduce((s, c) => s + c.unitPrice * c.quantity, 0);
 

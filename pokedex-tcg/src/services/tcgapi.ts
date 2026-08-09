@@ -1,14 +1,8 @@
-// Pokémon TCG API — busca de cartas, sets e preços.
-// Docs: https://docs.pokemontcg.io
+// Formato de carta que o app consome. Os dados vêm da TCGdex
+// (ver services/tcgdex.ts); este arquivo guarda o contrato e a conversão
+// para o documento gravado no Firestore.
 
-import type { OwnedCard, PokemonType, TcgSet } from '@/types';
-
-const BASE = 'https://api.pokemontcg.io/v2';
-const KEY = import.meta.env.VITE_POKEMONTCG_API_KEY;
-
-function headers(): HeadersInit {
-  return KEY ? { 'X-Api-Key': KEY } : {};
-}
+import type { OwnedCard, PokemonType } from '@/types';
 
 export interface TcgCard {
   id: string;
@@ -29,106 +23,6 @@ export interface TcgCard {
  * Requisição com repetição em erro de servidor.
  * A Pokémon TCG API devolve 5xx com alguma frequência sob carga — e uma
  * falha dessas não é motivo para o usuário refazer a foto.
- */
-async function request<T>(path: string, tentativa = 1): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, { headers: headers() });
-
-  if (res.status >= 500 && tentativa < 3) {
-    await new Promise((r) => setTimeout(r, 600 * tentativa));
-    return request<T>(path, tentativa + 1);
-  }
-
-  if (res.status === 429) {
-    throw new Error(
-      'Limite de consultas da API atingido. Cadastre uma chave gratuita em dev.pokemontcg.io para liberar mais buscas.',
-    );
-  }
-
-  if (!res.ok) {
-    throw new Error(
-      res.status >= 500
-        ? 'O serviço de cartas está instável agora. Tente de novo em instantes.'
-        : `Consulta recusada pela API (${res.status}).`,
-    );
-  }
-
-  const json = await res.json();
-  return json.data as T;
-}
-
-/** Aspas e barras soltas quebram a sintaxe de busca e geram erro 500. */
-function sanitizar(valor: string): string {
-  return valor.replace(/[^A-Za-zÀ-ÿ0-9 .'-]/g, ' ').replace(/\s{2,}/g, ' ').trim();
-}
-
-/**
- * Preço bruto da carta, NA MOEDA DA FONTE.
- * TCGplayer cota em dólar; Cardmarket, em euro. A conversão para real
- * acontece depois, com a cotação do dia — nunca aqui.
- */
-export function cardPrice(card: TcgCard): { amount: number; currency: 'USD' | 'EUR' } | null {
-  const tcg = card.tcgplayer?.prices;
-  if (tcg) {
-    const order = ['holofoil', 'reverseHolofoil', 'normal', '1stEditionHolofoil', 'unlimitedHolofoil'];
-    for (const k of order) {
-      const p = tcg[k]?.market ?? tcg[k]?.mid;
-      if (p) return { amount: p, currency: 'USD' };
-    }
-  }
-  const cm = card.cardmarket?.prices?.trendPrice ?? card.cardmarket?.prices?.averageSellPrice;
-  return cm ? { amount: cm, currency: 'EUR' } : null;
-}
-
-export async function searchCards(query: string, page = 1, pageSize = 24) {
-  const q = encodeURIComponent(query);
-  return request<TcgCard[]>(`/cards?q=${q}&page=${page}&pageSize=${pageSize}&orderBy=-set.releaseDate`);
-}
-
-export async function getCard(tcgId: string) {
-  return request<TcgCard>(`/cards/${tcgId}`);
-}
-
-/** Busca por nome + número impresso — é o que o scanner consegue ler da carta. */
-export async function findByNameAndNumber(name: string, number?: string, setId?: string) {
-  const limpo = sanitizar(name);
-  if (!limpo) return [];
-
-  const parts = [`name:"${limpo}"`];
-  if (number) parts.push(`number:${sanitizar(number)}`);
-  if (setId) parts.push(`set.id:${sanitizar(setId)}`);
-  return searchCards(parts.join(' '), 1, 12);
-}
-
-/**
- * Identificação exata: coleção + número impresso.
- * Não depende de foto, luz nem OCR — é a forma mais confiável de
- * cadastrar uma carta, e costuma ser mais rápida que insistir na câmera.
- */
-export async function findBySetAndNumber(setId: string, number: string) {
-  const limpo = number.trim().replace(/^0+(?=\d)/, '');
-  if (!setId || !limpo) return [];
-  return searchCards(`set.id:${sanitizar(setId)} number:${sanitizar(limpo)}`, 1, 12);
-}
-
-export async function listSets(): Promise<TcgSet[]> {
-  const sets = await request<TcgCard['set'][]>('/sets?orderBy=-releaseDate&pageSize=250');
-  return sets.map((s) => ({
-    id: s.id,
-    name: s.name,
-    series: s.series,
-    ptcgoCode: s.ptcgoCode,
-    total: s.total,
-    printedTotal: s.printedTotal,
-    releaseDate: s.releaseDate,
-    logo: s.images.logo,
-    symbol: s.images.symbol,
-  }));
-}
-
-/**
- * Converte a resposta da API no formato gravado no Firestore.
- * O preço NÃO vem da API: o valor é digitado por quem cadastra, porque a
- * cotação internacional não reflete o mercado brasileiro.
  */
 export function toOwnedCard(
   card: TcgCard,

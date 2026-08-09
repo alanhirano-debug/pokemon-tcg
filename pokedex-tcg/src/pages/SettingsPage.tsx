@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useCollection } from '@/contexts/CollectionContext';
 import { importCards, saveSettings } from '@/services/collectionService';
@@ -6,6 +6,7 @@ import { exportBackup, readBackup } from '@/services/exportService';
 import { clearPokedexCache } from '@/services/pokeapi';
 import { SPRITE_STYLE_OPTIONS } from '@/services/sprites';
 import { VERSAO } from '@/lib/versao';
+import { migrarParaTcgdex, type ResultadoMigracao } from '@/services/migracao';
 import { PokemonSprite } from '@/components/pokedex/PokemonSprite';
 import type { SpriteStyle, UserSettings } from '@/types';
 
@@ -13,6 +14,25 @@ export function SettingsPage() {
   const { user, logout } = useAuth();
   const { settings, setSettings, cards } = useCollection();
   const fileRef = useRef<HTMLInputElement>(null);
+  const [migrando, setMigrando] = useState(false);
+  const [progresso, setProgresso] = useState(0);
+  const [resultado, setResultado] = useState<ResultadoMigracao | null>(null);
+
+  async function migrar() {
+    if (!user) return;
+    // Backup antes de qualquer escrita em massa.
+    exportBackup(cards);
+    setMigrando(true);
+    setResultado(null);
+    try {
+      const r = await migrarParaTcgdex(user.uid, cards, (feitas, total) =>
+        setProgresso(Math.round((feitas / total) * 100)),
+      );
+      setResultado(r);
+    } finally {
+      setMigrando(false);
+    }
+  }
 
   function patch(next: Partial<UserSettings>) {
     const merged = { ...settings, ...next };
@@ -78,6 +98,56 @@ export function SettingsPage() {
             </button>
           ))}
         </div>
+      </Section>
+
+      <Section
+        title="Migrar coleção para a TCGdex"
+        hint="Atualiza as cartas cadastradas na fonte antiga para o novo padrão, trazendo as versões em português."
+      >
+        <p className="text-xs text-mist">
+          Quantidade, condição, idioma, valor e favoritos não são alterados. Um backup é
+          baixado automaticamente antes de começar, e cartas que não resolverem ficam
+          intactas e aparecem no relatório.
+        </p>
+
+        {migrando && (
+          <div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-ink-500">
+              <div className="h-full bg-flame transition-all" style={{ width: `${progresso}%` }} />
+            </div>
+            <p className="mt-1.5 text-xs text-mist">Migrando… {progresso}%</p>
+          </div>
+        )}
+
+        {resultado && (
+          <div className="rounded-xl border border-white/10 p-3 text-sm">
+            <p className="font-display font-bold">
+              {resultado.migradas} de {resultado.total} cartas atualizadas
+            </p>
+            {resultado.falhas.length > 0 ? (
+              <>
+                <p className="mt-1 text-xs text-gold">
+                  {resultado.falhas.length} não resolveram e ficaram como estavam:
+                </p>
+                <ul className="mt-1.5 max-h-40 space-y-0.5 overflow-y-auto text-[11px] text-mist">
+                  {resultado.falhas.map((f, i) => (
+                    <li key={i}>{f.carta} · {f.colecao} — {f.motivo}</li>
+                  ))}
+                </ul>
+              </>
+            ) : (
+              <p className="mt-1 text-xs text-mist">Nenhuma falha. Coleção inteira migrada.</p>
+            )}
+          </div>
+        )}
+
+        <button
+          onClick={migrar}
+          disabled={migrando || cards.length === 0}
+          className="rounded-xl bg-flame px-4 py-2.5 font-display text-sm font-bold transition hover:bg-flame-soft disabled:opacity-40"
+        >
+          {migrando ? 'Migrando…' : `Migrar ${cards.length} cartas`}
+        </button>
       </Section>
 
       <Section title="Backup" hint={`${cards.length} cartas registradas.`}>

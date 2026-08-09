@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
-import { findBySetAndNumber, listSets, type TcgCard } from '@/services/tcgapi';
+import { buscarPorNumero, listarColecoes } from '@/services/tcgdex';
+import type { TcgCard } from '@/services/tcgapi';
 import type { TcgSet } from '@/types';
 
 /** Última coleção usada, para o próximo cadastro já começar nela. */
@@ -26,17 +27,18 @@ export function BuscaPorNumero({ onResultados, onErro, colecoesUsadas }: Props) 
   const [trocando, setTrocando] = useState(false);
   const [numero, setNumero] = useState('');
   const [carregando, setCarregando] = useState(true);
+  const [falhou, setFalhou] = useState(false);
   const [buscando, setBuscando] = useState(false);
 
   useEffect(() => {
-    listSets()
+    listarColecoes()
       .then((lista) => {
         setSets(lista);
         const ultima = localStorage.getItem(CHAVE_ULTIMA);
         const anterior = ultima ? lista.find((s) => s.id === ultima) : null;
         if (anterior) setSetEscolhido(anterior);
       })
-      .catch(() => onErro('Não consegui carregar a lista de coleções.'))
+      .catch(() => setFalhou(true))
       .finally(() => setCarregando(false));
   }, [onErro]);
 
@@ -65,7 +67,7 @@ export function BuscaPorNumero({ onResultados, onErro, colecoesUsadas }: Props) 
     if (!setEscolhido || !numero.trim()) return;
     setBuscando(true);
     try {
-      const cards = await findBySetAndNumber(setEscolhido.id, numero);
+      const cards = await buscarPorNumero(setEscolhido.id, numero);
       if (cards.length === 0) {
         onErro(`Nenhuma carta ${numero} em ${setEscolhido.name}. Confira o número antes da barra.`);
         return;
@@ -81,6 +83,23 @@ export function BuscaPorNumero({ onResultados, onErro, colecoesUsadas }: Props) 
 
   if (carregando) {
     return <p className="py-8 text-center text-sm text-mist">Carregando coleções…</p>;
+  }
+
+  if (falhou) {
+    return (
+      <div className="panel px-5 py-8 text-center">
+        <p className="font-display font-semibold">Não consegui carregar as coleções</p>
+        <p className="mt-1 text-sm text-mist">
+          A API de cartas não respondeu. Verifique sua conexão e tente novamente.
+        </p>
+        <button
+          onClick={() => location.reload()}
+          className="mt-4 rounded-xl bg-flame px-4 py-2 font-display text-sm font-bold"
+        >
+          Tentar de novo
+        </button>
+      </div>
+    );
   }
 
   const mostrandoLista = !setEscolhido || trocando;
@@ -187,7 +206,7 @@ function Grupo({
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-semibold">{s.name}</span>
                 <span className="block truncate text-[11px] text-mist">
-                  {s.ptcgoCode ? `${s.ptcgoCode} · ` : ''}{s.printedTotal} cartas · {s.releaseDate}
+                  {s.id.toUpperCase()} · {s.printedTotal} cartas{s.releaseDate ? ` · ${s.releaseDate}` : ''}
                 </span>
               </span>
             </button>

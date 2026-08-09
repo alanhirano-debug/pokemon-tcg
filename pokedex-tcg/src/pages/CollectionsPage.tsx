@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useCollection } from '@/contexts/CollectionContext';
-import { listSets } from '@/services/tcgapi';
+import { listarColecoes } from '@/services/tcgdex';
 import { brl, pct } from '@/lib/format';
 import type { TcgSet } from '@/types';
 
@@ -11,7 +11,7 @@ export function CollectionsPage() {
   const [onlyMine, setOnlyMine] = useState(true);
 
   useEffect(() => {
-    listSets().then(setSets).catch(() => setSets([])).finally(() => setLoading(false));
+    listarColecoes().then(setSets).catch(() => setSets([])).finally(() => setLoading(false));
   }, []);
 
   const bySet = useMemo(() => {

@@ -1,16 +1,20 @@
+import { lazy, Suspense } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { AppShell, PokeballMark } from '@/components/layout/AppShell';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { CollectionProvider } from '@/contexts/CollectionContext';
-import { AddCardPage } from '@/pages/AddCardPage';
-import { CollectionsPage } from '@/pages/CollectionsPage';
 import { LoginPage } from '@/pages/LoginPage';
-import { AlbumPage } from '@/pages/AlbumPage';
 import { PokedexPage } from '@/pages/PokedexPage';
-import { PokemonDetailPage } from '@/pages/PokemonDetailPage';
-import { SettingsPage } from '@/pages/SettingsPage';
-import { StatsPage } from '@/pages/StatsPage';
-import { WishlistPage } from '@/pages/WishlistPage';
+
+// Cada tela vira um pedaço separado, baixado só quando você entra nela.
+// Sem isto, abrir a Pokédex trazia junto gráficos, planilhas e PDF.
+const AddCardPage = lazy(() => import('@/pages/AddCardPage').then((m) => ({ default: m.AddCardPage })));
+const AlbumPage = lazy(() => import('@/pages/AlbumPage').then((m) => ({ default: m.AlbumPage })));
+const CollectionsPage = lazy(() => import('@/pages/CollectionsPage').then((m) => ({ default: m.CollectionsPage })));
+const PokemonDetailPage = lazy(() => import('@/pages/PokemonDetailPage').then((m) => ({ default: m.PokemonDetailPage })));
+const SettingsPage = lazy(() => import('@/pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
+const StatsPage = lazy(() => import('@/pages/StatsPage').then((m) => ({ default: m.StatsPage })));
+const WishlistPage = lazy(() => import('@/pages/WishlistPage').then((m) => ({ default: m.WishlistPage })));
 
 export default function App() {
   return (
@@ -41,6 +45,7 @@ function Gate() {
 
   return (
     <CollectionProvider>
+      <Suspense fallback={<div className="grid min-h-[50vh] place-items-center text-sm text-mist">Carregando…</div>}>
       <Routes>
         <Route element={<AppShell />}>
           <Route index element={<PokedexPage />} />
@@ -55,6 +60,7 @@ function Gate() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
+      </Suspense>
     </CollectionProvider>
   );
 }

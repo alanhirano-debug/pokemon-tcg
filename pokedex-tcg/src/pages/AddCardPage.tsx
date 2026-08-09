@@ -6,7 +6,8 @@ import { useCollection } from '@/contexts/CollectionContext';
 import { PokemonSprite } from '@/components/pokedex/PokemonSprite';
 import { BuscaPorNumero } from '@/components/cards/BuscaPorNumero';
 import { addCards } from '@/services/collectionService';
-import { searchCards, toOwnedCard, type TcgCard } from '@/services/tcgapi';
+import { toOwnedCard, type TcgCard } from '@/services/tcgapi';
+import { cartasDaColecao } from '@/services/tcgdex';
 import { CONDITION_LABEL, LANGUAGE_LABEL, brl, dexNumber } from '@/lib/format';
 import type { CardCondition, CardLanguage, SpriteStyle } from '@/types';
 
@@ -68,7 +69,14 @@ export function AddCardPage() {
     setBuscando(true);
     setStatus('Buscando…');
     try {
-      const resultados = await searchCards(`name:"${manual.trim()}*"`);
+      const ultima = localStorage.getItem('pokedex-tcg:ultima-colecao');
+      if (!ultima) {
+        setStatus('Escolha uma coleção acima antes de buscar pelo nome.');
+        return;
+      }
+      const termo = manual.trim().toLowerCase();
+      const todas = await cartasDaColecao(ultima);
+      const resultados = todas.filter((c) => c.name.toLowerCase().includes(termo));
       setStatus(null);
       handleResults(resultados, manual);
     } catch (err: any) {
@@ -133,13 +141,13 @@ export function AddCardPage() {
         {status && <p className="text-center text-sm text-gold">{status}</p>}
 
         <div className="panel space-y-2 p-4">
-          <p className="text-xs text-mist">Não achou pelo número? Busque pelo nome:</p>
+          <p className="text-xs text-mist">Não sabe o número? Busque pelo nome dentro da coleção:</p>
           <div className="flex gap-2">
             <input
               value={manual}
               onChange={(e) => setManual(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && buscarPorNome()}
-              placeholder="Ex. Charizard ex"
+              placeholder="Nome da carta na coleção escolhida"
               className="flex-1 rounded-xl border border-white/10 bg-ink-800 px-3 py-2.5 text-sm outline-none focus:border-flame/60"
             />
             <button

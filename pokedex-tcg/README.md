@@ -83,11 +83,13 @@ npm run dev
 4. Cole o conteúdo de `firestore.rules` em **Firestore → Regras** e publique. Elas garantem que cada conta só lê e escreve a própria coleção.
 5. **Configurações do projeto → Seus apps → Web**: copie as chaves para o `.env`.
 
-### Pokémon TCG API
+### APIs de cartas
 
-Crie uma conta em [dev.pokemontcg.io](https://dev.pokemontcg.io) e cole a chave em `VITE_POKEMONTCG_API_KEY`. Funciona sem chave, mas o limite de requisições é baixo — com o scanner em uso você bate nele rápido.
+Nenhuma chave necessária. Os dados vêm da [TCGdex](https://tcgdex.dev), gratuita e de código aberto, com o idioma na URL (`/v2/pt/`) — por isso as cartas aparecem em português, iguais às que você tem na mão.
 
-A PokéAPI não pede chave.
+A escolha veio de dois problemas com a pokemontcg.io: ela só cataloga cartas em inglês, e passou a devolver erro 500 de forma intermitente depois de virar parte da Scrydex.
+
+A PokéAPI, usada para os sprites e a Pokédex, também não pede chave.
 
 ---
 

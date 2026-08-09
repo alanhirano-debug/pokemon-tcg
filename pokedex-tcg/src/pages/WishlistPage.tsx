@@ -3,7 +3,8 @@ import { Heart, Plus, Trash2 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useCollection } from '@/contexts/CollectionContext';
 import { addToWishlist, removeFromWishlist } from '@/services/collectionService';
-import { searchCards, type TcgCard } from '@/services/tcgapi';
+import { cartasDaColecao } from '@/services/tcgdex';
+import type { TcgCard } from '@/services/tcgapi';
 import { brl } from '@/lib/format';
 
 export function WishlistPage() {
@@ -17,7 +18,14 @@ export function WishlistPage() {
     if (!term.trim()) return;
     setSearching(true);
     try {
-      setResults(await searchCards(`name:"${term.trim()}*"`, 1, 12));
+      const colecao = localStorage.getItem('pokedex-tcg:ultima-colecao');
+      if (!colecao) {
+        setResults([]);
+        return;
+      }
+      const alvo = term.trim().toLowerCase();
+      const todas = await cartasDaColecao(colecao);
+      setResults(todas.filter((c) => c.name.toLowerCase().includes(alvo)).slice(0, 12));
     } finally {
       setSearching(false);
     }
@@ -50,7 +58,7 @@ export function WishlistPage() {
           value={term}
           onChange={(e) => setTerm(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && search()}
-          placeholder="Procurar carta para adicionar"
+          placeholder="Buscar na última coleção usada"
           className="flex-1 rounded-xl border border-white/10 bg-ink-700 px-3 py-2.5 text-sm outline-none focus:border-flame/60"
         />
         <button onClick={search} disabled={searching} className="rounded-xl bg-flame px-4 font-display text-sm font-bold disabled:opacity-50">
