@@ -131,6 +131,20 @@ dentro do navegador, a leitura depende demais de luz, foco e fundo para ser
 confiável. Reconhecimento de verdade exige comparação de imagem contra um
 índice das cartas, que é outro projeto.
 
+## Lista de coleções embutida
+
+`npm run colecoes` baixa as coleções da TCGdex e grava `src/data/colecoes.json`,
+que entra no pacote do app. Roda automaticamente antes de `npm run build` e de
+`npm run dev`.
+
+Buscar ~170 coleções pela rede a cada abertura da tela era o que travava o
+cadastro. Embutida, a lista aparece na hora e funciona offline; uma atualização
+em segundo plano busca coleções novas sem segurar a interface.
+
+O script nunca derruba o build: se a API não responder, mantém o arquivo
+anterior; se nem esse existir, grava uma lista vazia e o app volta a buscar
+pela rede.
+
 ## Dados
 
 ```

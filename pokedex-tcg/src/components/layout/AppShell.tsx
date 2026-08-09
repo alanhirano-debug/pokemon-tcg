@@ -3,6 +3,7 @@ import {
   BarChart3, Heart, LayoutGrid, Library, LogOut, Plus, Settings, Star,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import { VERSAO, buildFormatado } from '@/lib/versao';
 
 const NAV = [
   { to: '/', label: 'Pokédex', icon: LayoutGrid, end: true },
@@ -63,8 +64,11 @@ export function AppShell() {
         </button>
       </aside>
 
-      <main className="min-w-0 px-4 pb-32 pt-5 lg:px-7 lg:pb-8">
-        <Outlet />
+      <main className="flex min-w-0 flex-col px-4 pb-32 pt-5 lg:px-7 lg:pb-8">
+        <div className="flex-1">
+          <Outlet />
+        </div>
+        <Rodape />
       </main>
 
       {/* Barra inferior no celular */}
@@ -86,6 +90,17 @@ export function AppShell() {
         ))}
       </nav>
     </div>
+  );
+}
+
+/** Rodapé com versão e data do build — serve para confirmar o deploy. */
+function Rodape() {
+  const build = buildFormatado();
+  return (
+    <footer className="mt-10 border-t border-white/[0.06] pt-4 text-center text-[11px] text-mist">
+      Pokédex TCG · versão <b className="font-dex text-white/70">{VERSAO}</b>
+      {build && <> · build de {build}</>}
+    </footer>
   );
 }
 

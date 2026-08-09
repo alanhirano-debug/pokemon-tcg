@@ -5,7 +5,6 @@ import { importCards, saveSettings } from '@/services/collectionService';
 import { exportBackup, readBackup } from '@/services/exportService';
 import { clearPokedexCache } from '@/services/pokeapi';
 import { SPRITE_STYLE_OPTIONS } from '@/services/sprites';
-import { VERSAO } from '@/lib/versao';
 import { migrarParaTcgdex, type ResultadoMigracao } from '@/services/migracao';
 import { PokemonSprite } from '@/components/pokedex/PokemonSprite';
 import type { SpriteStyle, UserSettings } from '@/types';
@@ -177,10 +176,6 @@ export function SettingsPage() {
       <button onClick={logout} className="rounded-xl border border-flame/40 px-4 py-2.5 text-sm text-flame hover:bg-flame/10">
         Sair da conta
       </button>
-
-      <p className="pt-2 text-center text-xs text-mist">
-        Pokédex TCG · versão <b className="font-dex">{VERSAO}</b>
-      </p>
     </div>
   );
 }

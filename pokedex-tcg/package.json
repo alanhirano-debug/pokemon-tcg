@@ -4,7 +4,9 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "colecoes": "node scripts/baixar-colecoes.mjs",
+    "dev": "npm run colecoes && vite",
+    "prebuild": "node scripts/baixar-colecoes.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "lint": "eslint . --ext ts,tsx"

@@ -18,6 +18,7 @@
 import { get, set as idbSet } from 'idb-keyval';
 import type { TcgSet } from '@/types';
 import type { TcgCard } from './tcgapi';
+import colecoesEmbutidas from '@/data/colecoes.json';
 
 const IDIOMA = 'pt';
 const BASE = `https://api.tcgdex.net/v2/${IDIOMA}`;
@@ -134,17 +135,45 @@ export async function cartasDaColecao(setId: string): Promise<TcgCard[]> {
   return cards.map((c) => adaptarCarta({ ...c, set: dados }));
 }
 
+/**
+ * Lista de coleções.
+ *
+ * Ordem de prioridade, da mais rápida para a mais lenta:
+ *   1. Lista embutida no pacote (scripts/baixar-colecoes.mjs) — instantânea
+ *   2. Cache local de uma busca anterior
+ *   3. Rede
+ *
+ * Como a lista embutida é regravada a cada build, ela só fica velha se
+ * você passar meses sem publicar — e mesmo assim a atualização em segundo
+ * plano corrige na primeira abertura com internet.
+ */
 export async function listarColecoes(): Promise<TcgSet[]> {
-  const cache = await get<{ at: number; sets: TcgSet[] }>(CACHE_SETS);
-  if (cache && Date.now() - cache.at < CACHE_TTL) return cache.sets;
+  const embutidas = colecoesEmbutidas as TcgSet[];
 
-  let brutos: DexSet[];
-  try {
-    brutos = await buscar<DexSet[]>('/sets');
-  } catch (err) {
-    if (cache) return cache.sets;
-    throw err;
+  if (embutidas.length > 0) {
+    atualizarEmSegundoPlano();
+    return embutidas;
   }
+
+  const cache = await get<{ at: number; sets: TcgSet[] }>(CACHE_SETS);
+  if (cache?.sets.length) {
+    atualizarEmSegundoPlano();
+    return cache.sets;
+  }
+
+  return baixarColecoes();
+}
+
+/** Busca coleções novas sem segurar a tela. Falha em silêncio de propósito. */
+function atualizarEmSegundoPlano() {
+  get<{ at: number }>(CACHE_SETS).then((cache) => {
+    if (cache && Date.now() - cache.at < CACHE_TTL) return;
+    baixarColecoes().catch(() => undefined);
+  });
+}
+
+async function baixarColecoes(): Promise<TcgSet[]> {
+  const brutos = await buscar<DexSet[]>('/sets');
 
   const sets: TcgSet[] = brutos
     .map((s) => ({

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { PokeballMark } from '@/components/layout/AppShell';
 import { useAuth } from '@/contexts/AuthContext';
+import { VERSAO } from '@/lib/versao';
 
 type Mode = 'signin' | 'signup' | 'reset';
 
@@ -78,6 +79,10 @@ export function LoginPage() {
             <button onClick={() => setMode('reset')} className="hover:text-white">Esqueci a senha</button>
           </div>
         </div>
+
+        <p className="mt-6 text-center text-[11px] text-mist">
+          versão <b className="font-dex">{VERSAO}</b>
+        </p>
       </div>
     </div>
   );
