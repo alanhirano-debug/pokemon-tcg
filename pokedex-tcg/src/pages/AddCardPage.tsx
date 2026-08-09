@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Camera, Check, Info, Minus, Plus, RotateCcw, Search, Sparkles } from 'lucide-react';
+import { Camera, Check, ImagePlus, Info, Minus, Plus, RotateCcw, Search, Sparkles } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useCollection } from '@/contexts/CollectionContext';
 import { PokemonSprite } from '@/components/pokedex/PokemonSprite';
 import { addCards } from '@/services/collectionService';
 import { findByNameAndNumber, searchCards, toOwnedCard, type TcgCard } from '@/services/tcgapi';
-import { readCardText } from '@/services/cardRecognition';
+import { FULL_FRAME, readCardText, type Rect } from '@/services/cardRecognition';
 import { CONDITION_LABEL, LANGUAGE_LABEL, brl, dexNumber } from '@/lib/format';
 import type { CardCondition, CardLanguage, SpriteStyle } from '@/types';
 
@@ -18,6 +18,8 @@ export function AddCardPage() {
   const navigate = useNavigate();
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const guideRef = useRef<HTMLDivElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
   const [step, setStep] = useState<Step>('scan');
@@ -25,6 +27,10 @@ export function AddCardPage() {
   const [matches, setMatches] = useState<TcgCard[]>([]);
   const [selected, setSelected] = useState<TcgCard | null>(null);
   const [manual, setManual] = useState('');
+  const [cameraReady, setCameraReady] = useState(false);
+  const [busy, setBusy] = useState(false);
+  /** Texto cru do OCR — só aparece quando a leitura falha, para diagnóstico. */
+  const [ocrDebug, setOcrDebug] = useState<string | null>(null);
 
   // Dados do exemplar — escolhidos uma vez, valem para todas as cópias
   const [quantity, setQuantity] = useState(1);
@@ -40,48 +46,152 @@ export function AddCardPage() {
     if (step !== 'scan') return;
     let cancelled = false;
 
-    navigator.mediaDevices
-      .getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1920 } } })
-      .then((stream) => {
-        if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
-        streamRef.current = stream;
-        if (videoRef.current) videoRef.current.srcObject = stream;
-      })
-      .catch(() => setStatus('Não consegui abrir a câmera. Libere o acesso nas permissões do navegador ou busque a carta pelo nome.'));
+    async function abrirCamera() {
+      // Sem HTTPS o navegador nem expõe a API — e o erro que isso gerava
+      // antes era um crash silencioso, com a tela em branco.
+      if (!window.isSecureContext) {
+        setStatus('A câmera exige HTTPS. Abra o app pelo endereço publicado (Netlify/Vercel) ou por localhost — pelo IP da rede local o navegador bloqueia.');
+        return;
+      }
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setStatus('Este navegador não expõe a câmera. No iPhone, use o Safari; no Android, o Chrome.');
+        return;
+      }
+
+      // Primeiro a traseira; se o aparelho recusar a restrição, qualquer uma.
+      const tentativas: MediaStreamConstraints[] = [
+        { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 } } },
+        { video: { facingMode: 'environment' } },
+        { video: true },
+      ];
+
+      for (const constraints of tentativas) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia(constraints);
+          if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
+          streamRef.current = stream;
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+            await videoRef.current.play().catch(() => undefined);
+          }
+          setCameraReady(true);
+          setStatus(null);
+          return;
+        } catch (err: any) {
+          if (err?.name === 'NotAllowedError' || err?.name === 'SecurityError') {
+            setStatus('Permissão de câmera negada. Toque no cadeado ao lado do endereço e libere a câmera para este site.');
+            return;
+          }
+          if (err?.name === 'NotFoundError') {
+            setStatus('Nenhuma câmera encontrada neste aparelho.');
+            return;
+          }
+          if (err?.name === 'NotReadableError') {
+            setStatus('A câmera está ocupada por outro app. Feche-o e tente de novo.');
+            return;
+          }
+          // OverconstrainedError e afins: cai para a próxima tentativa.
+        }
+      }
+
+      setStatus('Não consegui abrir a câmera. Use a foto da galeria abaixo — funciona igual.');
+    }
+
+    abrirCamera();
 
     return () => {
       cancelled = true;
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
+      setCameraReady(false);
     };
   }, [step]);
 
+  /**
+   * Converte a moldura que o usuário vê em coordenadas do frame real.
+   * O vídeo aparece com object-cover, então parte dele fica fora da tela —
+   * medir os dois elementos é o único jeito de recortar exatamente o que
+   * está dentro da moldura.
+   */
+  function molduraNoFrame(video: HTMLVideoElement): Rect {
+    const guide = guideRef.current;
+    if (!guide) return FULL_FRAME;
+
+    const vBox = video.getBoundingClientRect();
+    const gBox = guide.getBoundingClientRect();
+    const escala = Math.max(vBox.width / video.videoWidth, vBox.height / video.videoHeight);
+
+    const sobraX = (video.videoWidth * escala - vBox.width) / 2;
+    const sobraY = (video.videoHeight * escala - vBox.height) / 2;
+
+    return {
+      x: (gBox.left - vBox.left + sobraX) / escala / video.videoWidth,
+      y: (gBox.top - vBox.top + sobraY) / escala / video.videoHeight,
+      w: gBox.width / escala / video.videoWidth,
+      h: gBox.height / escala / video.videoHeight,
+    };
+  }
+
   async function capture() {
     const video = videoRef.current;
-    if (!video) return;
+    if (!video || !video.videoWidth) {
+      setStatus('A câmera ainda não está pronta. Aguarde um instante.');
+      return;
+    }
 
-    setStatus('Lendo a carta…');
     const canvas = document.createElement('canvas');
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     canvas.getContext('2d')?.drawImage(video, 0, 0);
 
+    await reconhecer(canvas, molduraNoFrame(video));
+  }
+
+  /** Foto da galeria ou da câmera nativa — caminho alternativo completo. */
+  async function usarFoto(file: File) {
+    const bitmap = await createImageBitmap(file);
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    canvas.getContext('2d')?.drawImage(bitmap, 0, 0);
+    bitmap.close();
+
+    await reconhecer(canvas, FULL_FRAME);
+  }
+
+  async function reconhecer(canvas: HTMLCanvasElement, area: Rect) {
+    setBusy(true);
+    setOcrDebug(null);
+    setStatus('Lendo a carta…');
+
     try {
-      const { name, number } = await readCardText(canvas);
-      if (!name) {
-        setStatus('Não deu para ler o nome. Aproxime a carta, melhore a luz ou busque pelo nome.');
+      const leitura = await readCardText(canvas, area);
+
+      if (!leitura.name) {
+        setStatus('Não consegui ler o nome. Aproxime a carta, melhore a luz, ou busque pelo nome abaixo.');
+        setOcrDebug(leitura.raw);
         return;
       }
+
+      // Primeiro com o número (mais preciso); sem resultado, só o nome.
+      let resultados = await findByNameAndNumber(leitura.name, leitura.number ?? undefined);
+      if (resultados.length === 0 && leitura.number) {
+        resultados = await findByNameAndNumber(leitura.name);
+      }
+
       setStatus(null);
-      const results = await findByNameAndNumber(name, number);
-      handleResults(results, name);
-    } catch {
-      setStatus('A leitura falhou. Tente de novo ou busque pelo nome.');
+      handleResults(resultados, leitura.name);
+      if (resultados.length === 0) setOcrDebug(leitura.raw);
+    } catch (err: any) {
+      setStatus(`A leitura falhou: ${err?.message ?? 'erro desconhecido'}. Tente a busca por nome.`);
+    } finally {
+      setBusy(false);
     }
   }
 
   async function searchManually() {
     if (!manual.trim()) return;
+    setOcrDebug(null);
     setStatus('Buscando…');
     try {
       const results = await searchCards(`name:"${manual.trim()}*"`);
@@ -127,6 +237,7 @@ export function AddCardPage() {
     setMatches([]);
     setQuantity(1);
     setStatus(null);
+    setOcrDebug(null);
     setWasNewToDex(false);
     setStep('scan');
   }
@@ -139,22 +250,75 @@ export function AddCardPage() {
 
         <div className="relative aspect-[3/4] overflow-hidden rounded-2xl border border-white/10 bg-ink-900">
           <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-cover" />
+
+          {/* A moldura tem a proporção real de uma carta (63x88mm). O recorte
+              do OCR é medido a partir dela, então o que você encaixa aqui é
+              exatamente o que é lido. */}
           <div className="pointer-events-none absolute inset-0 grid place-items-center">
-            <div className="relative h-[68%] w-[74%] rounded-xl border-2 border-flame/70">
+            <div
+              ref={guideRef}
+              className="relative aspect-[63/88] h-[86%] rounded-xl border-2 border-flame/70"
+            >
               <div className="absolute inset-x-0 top-1/2 h-0.5 bg-flame/70 animate-scan-line" />
             </div>
           </div>
+
+          {!cameraReady && (
+            <div className="absolute inset-0 grid place-items-center bg-ink-900/85 px-6 text-center">
+              <p className="text-sm text-mist">
+                {status ?? 'Abrindo a câmera…'}
+              </p>
+            </div>
+          )}
         </div>
 
-        {status && <p className="text-center text-sm text-gold">{status}</p>}
+        {cameraReady && status && <p className="text-center text-sm text-gold">{status}</p>}
 
-        <button
-          onClick={capture}
-          className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-flame shadow-glow transition hover:bg-flame-soft"
-          aria-label="Capturar carta"
-        >
-          <Camera size={26} />
-        </button>
+        <div className="flex items-center justify-center gap-6">
+          <button
+            onClick={() => fileRef.current?.click()}
+            className="grid h-12 w-12 place-items-center rounded-2xl border border-white/10 bg-ink-600 transition hover:border-white/25"
+            aria-label="Usar foto da galeria"
+          >
+            <ImagePlus size={20} />
+          </button>
+
+          <button
+            onClick={capture}
+            disabled={!cameraReady || busy}
+            className="flex h-16 w-16 items-center justify-center rounded-full bg-flame shadow-glow transition hover:bg-flame-soft disabled:opacity-40"
+            aria-label="Capturar carta"
+          >
+            <Camera size={26} />
+          </button>
+
+          <div className="h-12 w-12" aria-hidden />
+        </div>
+
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          hidden
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) usarFoto(file);
+            e.target.value = '';
+          }}
+        />
+
+        <p className="text-center text-xs text-mist">
+          Sem câmera? O botão da esquerda aceita uma foto da carta.
+        </p>
+
+        {ocrDebug && (
+          <details className="panel p-3 text-xs">
+            <summary className="cursor-pointer text-mist">O que o app leu na carta</summary>
+            <pre className="mt-2 whitespace-pre-wrap break-words font-dex text-[10px] text-mist">
+              {ocrDebug}
+            </pre>
+          </details>
+        )}
 
         <div className="panel space-y-2 p-4">
           <p className="text-xs text-mist">Prefere digitar?</p>
