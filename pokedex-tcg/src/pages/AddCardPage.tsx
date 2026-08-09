@@ -1,19 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Camera, Check, Minus, Plus, RotateCcw, Search } from 'lucide-react';
+import { Camera, Check, Info, Minus, Plus, RotateCcw, Search, Sparkles } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useCollection } from '@/contexts/CollectionContext';
+import { PokemonSprite } from '@/components/pokedex/PokemonSprite';
 import { addCards } from '@/services/collectionService';
 import { findByNameAndNumber, searchCards, toOwnedCard, type TcgCard } from '@/services/tcgapi';
 import { readCardText } from '@/services/cardRecognition';
-import { CONDITION_LABEL, LANGUAGE_LABEL, brl } from '@/lib/format';
-import type { CardCondition, CardLanguage } from '@/types';
+import { CONDITION_LABEL, LANGUAGE_LABEL, brl, dexNumber } from '@/lib/format';
+import type { CardCondition, CardLanguage, SpriteStyle } from '@/types';
 
 type Step = 'scan' | 'picking' | 'confirm' | 'done';
 
 export function AddCardPage() {
   const { user } = useAuth();
-  const { cards } = useCollection();
+  const { cards, pokedex, settings, fx } = useCollection();
   const navigate = useNavigate();
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -30,6 +31,10 @@ export function AddCardPage() {
   const [condition, setCondition] = useState<CardCondition>('NM');
   const [language, setLanguage] = useState<CardLanguage>('PT');
   const [isReverse, setIsReverse] = useState(false);
+
+  // Guarda o status ANTES de gravar — depois do addCards a assinatura do
+  // Firestore atualiza `cards` e o Pokémon deixaria de parecer inédito.
+  const [wasNewToDex, setWasNewToDex] = useState(false);
 
   useEffect(() => {
     if (step !== 'scan') return;
@@ -101,9 +106,18 @@ export function AddCardPage() {
     setStep('picking');
   }
 
+  // Situação do Pokémon desta carta na Pokédex do usuário.
+  const pokedexId = selected?.nationalPokedexNumbers?.[0] ?? 0;
+  const dexEntry = pokedex.find((p) => p.id === pokedexId);
+  const ownedOfPokemon = pokedexId > 0 ? cards.filter((c) => c.pokedexId === pokedexId) : [];
+  const copiesOfPokemon = ownedOfPokemon.reduce((sum, c) => sum + c.quantity, 0);
+  const isNewToDex = pokedexId > 0 && ownedOfPokemon.length === 0;
+  const hasNoDexEntry = Boolean(selected) && pokedexId === 0;
+
   async function confirmAdd() {
     if (!user || !selected) return;
-    const payload = toOwnedCard(selected, { quantity, condition, language, isReverse });
+    const payload = toOwnedCard(selected, { quantity, condition, language, isReverse }, fx);
+    setWasNewToDex(isNewToDex);
     await addCards(user.uid, payload, cards);
     setStep('done');
   }
@@ -113,6 +127,7 @@ export function AddCardPage() {
     setMatches([]);
     setQuantity(1);
     setStatus(null);
+    setWasNewToDex(false);
     setStep('scan');
   }
 
@@ -188,10 +203,22 @@ export function AddCardPage() {
 
   // ── Passo 3: confirmar e definir quantidade ───────────────
   if (step === 'confirm' && selected) {
-    const unit = toOwnedCard(selected).unitPrice;
+    const unit = toOwnedCard(selected, {}, fx).unitPrice;
     return (
       <div className="mx-auto max-w-md space-y-4">
         <Header title="Carta identificada" hint="Confira os dados e diga quantas cópias você tem." />
+
+        <DexStatus
+          isNew={isNewToDex}
+          hasNoDexEntry={hasNoDexEntry}
+          pokedexId={pokedexId}
+          pokemonName={dexEntry?.name ?? selected.name}
+          slug={dexEntry?.slug}
+          versions={ownedOfPokemon.length}
+          copies={copiesOfPokemon}
+          spriteStyle={settings.spriteStyle}
+          animated={settings.animatedSprites}
+        />
 
         <div className="panel flex gap-4 p-4">
           <img src={selected.images.small} alt={selected.name} className="w-24 rounded-lg" />
@@ -200,7 +227,11 @@ export function AddCardPage() {
             <p className="text-sm text-mist">{selected.set.name}</p>
             <p className="text-sm text-mist">{selected.number}/{selected.set.printedTotal} · {selected.rarity ?? 'Comum'}</p>
             <p className="mt-2 font-display font-bold text-flame">{brl(unit)}</p>
-            <p className="text-[11px] text-mist">preço atualizado agora</p>
+            <p className="text-[11px] text-mist">
+              {fx.live
+                ? `convertido pelo dólar de hoje (R$ ${fx.usd.toFixed(2)})`
+                : `dólar de referência (R$ ${fx.usd.toFixed(2)})`}
+            </p>
           </div>
         </div>
 
@@ -257,6 +288,28 @@ export function AddCardPage() {
         </p>
         <p className="mt-1 text-sm text-mist">{selected?.name} · {selected?.set.name}</p>
 
+        {wasNewToDex && (
+          <div className="mx-auto mt-5 flex max-w-xs items-center gap-3 rounded-2xl border border-gold/40 bg-gold/10 p-3 text-left">
+            <PokemonSprite
+              id={pokedexId}
+              name={dexEntry?.name ?? ''}
+              slug={dexEntry?.slug}
+              size={52}
+              style={settings.spriteStyle}
+              animated={settings.animatedSprites}
+              eager
+            />
+            <div>
+              <p className="flex items-center gap-1.5 font-display text-sm font-bold text-gold">
+                <Sparkles size={14} /> Novo na Pokédex
+              </p>
+              <p className="text-xs text-mist">
+                {dexEntry?.name} saiu do cinza. Nº {dexNumber(pokedexId)} registrado.
+              </p>
+            </div>
+          </div>
+        )}
+
         <div className="mt-6 flex flex-col gap-2">
           <button onClick={restart} className="rounded-xl bg-flame px-5 py-2.5 font-display font-bold">
             Escanear outra
@@ -268,6 +321,87 @@ export function AddCardPage() {
             Ver na Pokédex
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Diz, antes de gravar, o que esta carta significa para a Pokédex:
+ * um Pokémon inédito, mais uma versão de um que já tem, ou uma carta
+ * sem entrada na Pokédex (Treinador, Energia, itens).
+ */
+function DexStatus({
+  isNew, hasNoDexEntry, pokedexId, pokemonName, slug, versions, copies, spriteStyle, animated,
+}: {
+  isNew: boolean;
+  hasNoDexEntry: boolean;
+  pokedexId: number;
+  pokemonName: string;
+  slug?: string;
+  versions: number;
+  copies: number;
+  spriteStyle: SpriteStyle;
+  animated: boolean;
+}) {
+  if (hasNoDexEntry) {
+    return (
+      <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-ink-700 p-3">
+        <div className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-ink-500">
+          <Info size={20} className="text-mist" />
+        </div>
+        <div>
+          <p className="font-display text-sm font-bold">Carta sem entrada na Pokédex</p>
+          <p className="text-xs text-mist">
+            Treinador, Energia ou item. Entra na sua coleção e no valor total, mas não marca nenhum Pokémon.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (isNew) {
+    return (
+      <div className="flex items-center gap-3 rounded-2xl border border-gold/45 bg-gold/10 p-3 shadow-[0_0_28px_-10px_rgba(255,203,5,.5)]">
+        <PokemonSprite
+          id={pokedexId}
+          name={pokemonName}
+          slug={slug}
+          owned={false}
+          size={52}
+          style={spriteStyle}
+          animated={animated}
+          eager
+        />
+        <div>
+          <p className="flex items-center gap-1.5 font-display text-sm font-bold text-gold">
+            <Sparkles size={14} /> Pokémon não cadastrado
+          </p>
+          <p className="text-xs text-mist">
+            Você ainda não tem nenhuma carta do {pokemonName}. Adicionar esta preenche o nº {dexNumber(pokedexId)} da Pokédex.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-ink-700 p-3">
+      <PokemonSprite
+        id={pokedexId}
+        name={pokemonName}
+        slug={slug}
+        size={52}
+        style={spriteStyle}
+        animated={animated}
+        eager
+      />
+      <div>
+        <p className="font-display text-sm font-bold">{pokemonName} já está na sua Pokédex</p>
+        <p className="text-xs text-mist">
+          Você tem {copies} {copies === 1 ? 'carta' : 'cartas'} dele em{' '}
+          {versions} {versions === 1 ? 'versão' : 'versões'} diferentes.
+        </p>
       </div>
     </div>
   );

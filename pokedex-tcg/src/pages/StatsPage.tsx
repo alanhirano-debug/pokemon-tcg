@@ -9,7 +9,7 @@ import { GENERATIONS } from '@/services/pokeapi';
 import { TYPE_LABEL, brl, pct } from '@/lib/format';
 
 export function StatsPage() {
-  const { pokedex, cards, holdings } = useCollection();
+  const { pokedex, cards, holdings, fx } = useCollection();
   const stats = useStats(pokedex, cards, holdings);
 
   const byRegion = GENERATIONS.map(({ region, from, to }) => {
@@ -22,7 +22,9 @@ export function StatsPage() {
     <div className="space-y-6">
       <header>
         <h1 className="font-display text-2xl font-extrabold">Estatísticas</h1>
-        <p className="text-sm text-mist">O retrato da sua coleção em números.</p>
+        <p className="text-sm text-mist">
+          O retrato da sua coleção em números. Valores convertidos pelo dólar de R$ {fx.usd.toFixed(2)}.
+        </p>
       </header>
 
       <section className="panel flex flex-wrap items-center gap-8 p-6">

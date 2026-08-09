@@ -2,11 +2,10 @@
 // Docs: https://docs.pokemontcg.io
 
 import type { OwnedCard, PokemonType, TcgSet } from '@/types';
+import { FALLBACK_RATES, convert, type Rates } from './exchange';
 
 const BASE = 'https://api.pokemontcg.io/v2';
 const KEY = import.meta.env.VITE_POKEMONTCG_API_KEY;
-/** Cotação de fallback quando a carta só tem preço em USD/EUR. */
-const USD_BRL = 5.4;
 
 function headers(): HeadersInit {
   return KEY ? { 'X-Api-Key': KEY } : {};
@@ -34,21 +33,23 @@ async function request<T>(path: string): Promise<T> {
   return json.data as T;
 }
 
-/** Preço em BRL. Prefere TCGplayer (market), cai para Cardmarket. */
-export function priceInBRL(card: TcgCard): number {
+/**
+ * Preço bruto da carta, NA MOEDA DA FONTE.
+ * TCGplayer cota em dólar; Cardmarket, em euro. A conversão para real
+ * acontece depois, com a cotação do dia — nunca aqui.
+ */
+export function cardPrice(card: TcgCard): { amount: number; currency: 'USD' | 'EUR' } | null {
   const tcg = card.tcgplayer?.prices;
   if (tcg) {
     const order = ['holofoil', 'reverseHolofoil', 'normal', '1stEditionHolofoil', 'unlimitedHolofoil'];
     for (const k of order) {
       const p = tcg[k]?.market ?? tcg[k]?.mid;
-      if (p) return round2(p * USD_BRL);
+      if (p) return { amount: p, currency: 'USD' };
     }
   }
   const cm = card.cardmarket?.prices?.trendPrice ?? card.cardmarket?.prices?.averageSellPrice;
-  return cm ? round2(cm * USD_BRL) : 0;
+  return cm ? { amount: cm, currency: 'EUR' } : null;
 }
-
-const round2 = (n: number) => Math.round(n * 100) / 100;
 
 export async function searchCards(query: string, page = 1, pageSize = 24) {
   const q = encodeURIComponent(query);
@@ -85,8 +86,10 @@ export async function listSets(): Promise<TcgSet[]> {
 export function toOwnedCard(
   card: TcgCard,
   overrides: Partial<OwnedCard> = {},
+  rates: Rates = FALLBACK_RATES,
 ): Omit<OwnedCard, 'id'> {
   const now = Date.now();
+  const price = cardPrice(card);
   return {
     tcgId: card.id,
     pokedexId: card.nationalPokedexNumbers?.[0] ?? 0,
@@ -107,7 +110,9 @@ export function toOwnedCard(
     isHolo: /holo/i.test(card.rarity ?? ''),
     isReverse: false,
     isFirstEdition: false,
-    unitPrice: priceInBRL(card),
+    unitPrice: price ? convert(price.amount, price.currency, rates) : 0,
+    priceOrigin: price?.amount,
+    priceCurrency: price?.currency,
     priceUpdatedAt: now,
     favorite: false,
     createdAt: now,

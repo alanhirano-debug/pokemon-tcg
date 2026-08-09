@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { Search, SlidersHorizontal, X } from 'lucide-react';
+import { AlertTriangle, Search, SlidersHorizontal, X } from 'lucide-react';
 import { PokedexGrid } from '@/components/pokedex/PokedexGrid';
 import { useCollection } from '@/contexts/CollectionContext';
 import { usePokedexFilters } from '@/hooks/usePokedexFilters';
-import { GENERATIONS } from '@/services/pokeapi';
+import { GENERATIONS, NATIONAL_DEX_TOTAL, clearPokedexCache } from '@/services/pokeapi';
 import { TYPE_LABEL, pct } from '@/lib/format';
 import type { PokemonType } from '@/types';
 
@@ -27,8 +27,29 @@ export function PokedexPage() {
     );
   }
 
+  const dexIncomplete = pokedex.length > 0 && pokedex.length < NATIONAL_DEX_TOTAL;
+
   return (
     <div className="space-y-5">
+      {dexIncomplete && (
+        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-gold/40 bg-gold/10 p-3">
+          <AlertTriangle size={18} className="text-gold" />
+          <p className="flex-1 text-sm">
+            <b className="font-display">Pokédex incompleta.</b>{' '}
+            <span className="text-mist">
+              {pokedex.length} de {NATIONAL_DEX_TOTAL} carregados — a rede caiu durante o download.
+              Suas cartas estão a salvo; só faltam entradas da lista.
+            </span>
+          </p>
+          <button
+            onClick={() => clearPokedexCache().then(() => location.reload())}
+            className="rounded-xl bg-gold px-3.5 py-2 font-display text-xs font-bold text-ink-900"
+          >
+            Baixar o que falta
+          </button>
+        </div>
+      )}
+
       <header className="flex flex-wrap items-center gap-3">
         <div className="relative min-w-[200px] flex-1">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-mist" />

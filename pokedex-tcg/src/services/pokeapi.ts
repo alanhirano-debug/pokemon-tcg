@@ -30,37 +30,100 @@ export const GENERATIONS = GEN_RANGES.map(([generation, from, to, region]) => ({
   generation, from, to, region,
 }));
 
-interface CachedDex { at: number; entries: PokedexEntry[] }
+interface CachedDex {
+  at: number;
+  entries: PokedexEntry[];
+  /** false quando algum Pokémon não pôde ser baixado. */
+  complete: boolean;
+}
 
-/** Pokédex completa. Usa cache local sempre que possível. */
+export const NATIONAL_DEX_TOTAL = 1025;
+
+/** Concorrência baixa: rede móvel derruba requisições em rajada. */
+const CONCURRENCY = 12;
+const RETRIES = 3;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Pokédex completa.
+ *
+ * Regra que faltava antes: um resultado incompleto NUNCA é tratado como
+ * definitivo. Ele é guardado marcado como parcial e, na abertura seguinte,
+ * o app busca só o que falta em vez de refazer os 1025.
+ */
 export async function loadPokedex(onProgress?: (pct: number) => void): Promise<PokedexEntry[]> {
   const cached = await get<CachedDex>(CACHE_KEY);
-  if (cached && Date.now() - cached.at < CACHE_TTL) return cached.entries;
+  const fresh = cached && Date.now() - cached.at < CACHE_TTL;
 
-  const total = 1025;
-  const batchSize = 60;
-  const entries: PokedexEntry[] = [];
+  if (fresh && cached.complete) return cached.entries;
 
-  for (let start = 1; start <= total; start += batchSize) {
-    const ids = Array.from(
-      { length: Math.min(batchSize, total - start + 1) },
-      (_, i) => start + i,
-    );
-    const batch = await Promise.all(ids.map(fetchEntry));
-    entries.push(...batch.filter((e): e is PokedexEntry => e !== null));
-    onProgress?.(Math.round((entries.length / total) * 100));
+  // Cache parcial: reaproveita o que já veio e persegue apenas os buracos.
+  const known = new Map<number, PokedexEntry>(
+    (cached?.entries ?? []).map((e) => [e.id, e]),
+  );
+
+  const missing = Array.from({ length: NATIONAL_DEX_TOTAL }, (_, i) => i + 1)
+    .filter((id) => !known.has(id));
+
+  const failed: number[] = [];
+
+  for (let i = 0; i < missing.length; i += CONCURRENCY) {
+    const slice = missing.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(slice.map((id) => fetchEntry(id)));
+
+    results.forEach((entry, index) => {
+      if (entry) known.set(entry.id, entry);
+      else failed.push(slice[index]);
+    });
+
+    onProgress?.(Math.round(((known.size) / NATIONAL_DEX_TOTAL) * 100));
   }
 
-  entries.sort((a, b) => a.id - b.id);
-  await set(CACHE_KEY, { at: Date.now(), entries } satisfies CachedDex);
+  // Segunda passada, mais devagar, só nos que falharam.
+  if (failed.length > 0) {
+    for (const id of failed) {
+      await sleep(120);
+      const entry = await fetchEntry(id);
+      if (entry) known.set(id, entry);
+      onProgress?.(Math.round((known.size / NATIONAL_DEX_TOTAL) * 100));
+    }
+  }
+
+  const entries = [...known.values()].sort((a, b) => a.id - b.id);
+  const complete = entries.length === NATIONAL_DEX_TOTAL;
+
+  await set(CACHE_KEY, { at: Date.now(), entries, complete } satisfies CachedDex);
+
+  if (!complete) {
+    console.warn(
+      `[Pokédex] ${entries.length}/${NATIONAL_DEX_TOTAL} carregados. ` +
+      `Faltam: ${Array.from({ length: NATIONAL_DEX_TOTAL }, (_, i) => i + 1)
+        .filter((id) => !known.has(id)).join(', ')}`,
+    );
+  }
+
   return entries;
 }
 
-async function fetchEntry(id: number): Promise<PokedexEntry | null> {
+/** Quantos Pokémon estão faltando no cache local. */
+export async function pokedexHealth() {
+  const cached = await get<CachedDex>(CACHE_KEY);
+  const loaded = cached?.entries.length ?? 0;
+  return { loaded, total: NATIONAL_DEX_TOTAL, missing: NATIONAL_DEX_TOTAL - loaded };
+}
+
+async function fetchJSON(url: string) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${res.status} em ${url}`);
+  return res.json();
+}
+
+async function fetchEntry(id: number, attempt = 1): Promise<PokedexEntry | null> {
   try {
     const [pokemon, species] = await Promise.all([
-      fetch(`${BASE}/pokemon/${id}`).then((r) => r.json()),
-      fetch(`${BASE}/pokemon-species/${id}`).then((r) => r.json()),
+      fetchJSON(`${BASE}/pokemon/${id}`),
+      fetchJSON(`${BASE}/pokemon-species/${id}`),
     ]);
 
     const ptName = species.names?.find((n: any) => n.language.name === 'ja')?.name;
@@ -83,6 +146,12 @@ async function fetchEntry(id: number): Promise<PokedexEntry | null> {
       genus: genus || ptName || '',
     };
   } catch {
+    // Backoff exponencial: 400ms, 800ms, 1600ms. Cobre oscilação de rede
+    // móvel e limite de requisições da PokéAPI.
+    if (attempt < RETRIES) {
+      await sleep(400 * 2 ** (attempt - 1));
+      return fetchEntry(id, attempt + 1);
+    }
     return null;
   }
 }

@@ -57,9 +57,13 @@ export interface OwnedCard {
   isFirstEdition: boolean;
   notes?: string;
 
-  // Preço em BRL, atualizado a partir da API
+  // Preço em BRL — recalculado na exibição com a cotação do dia.
   unitPrice: number;
   priceUpdatedAt: number;
+  /** Valor original da API, na moeda dela. Guardar isto é o que permite
+   *  reconverter a coleção inteira quando o câmbio muda. */
+  priceOrigin?: number;
+  priceCurrency?: 'USD' | 'EUR';
 
   favorite: boolean;
   createdAt: number;

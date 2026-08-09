@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 import { useAuth } from './AuthContext';
 import { loadPokedex } from '@/services/pokeapi';
 import { loadUserDoc, subscribeCards, subscribeWishlist } from '@/services/collectionService';
+import { FALLBACK_RATES, convert, getRates, type FxState } from '@/services/exchange';
 import type { OwnedCard, PokedexEntry, PokemonHolding, UserSettings, WishlistItem } from '@/types';
 
 const DEFAULT_SETTINGS: UserSettings = {
@@ -23,6 +24,7 @@ interface CollectionValue {
   holdings: Map<number, PokemonHolding>;
   loadingDex: boolean;
   dexProgress: number;
+  fx: FxState;
 }
 
 const CollectionContext = createContext<CollectionValue | null>(null);
@@ -30,12 +32,20 @@ const CollectionContext = createContext<CollectionValue | null>(null);
 export function CollectionProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const [pokedex, setPokedex] = useState<PokedexEntry[]>([]);
-  const [cards, setCards] = useState<OwnedCard[]>([]);
+  const [rawCards, setRawCards] = useState<OwnedCard[]>([]);
   const [wishlist, setWishlist] = useState<WishlistItem[]>([]);
   const [favoritePokemon, setFavoritePokemon] = useState<number[]>([]);
   const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
   const [loadingDex, setLoadingDex] = useState(true);
   const [dexProgress, setDexProgress] = useState(0);
+  const [fx, setFx] = useState<FxState>({ ...FALLBACK_RATES, updatedAt: 0, live: false });
+
+  // Cotação do dia, buscada uma vez por sessão.
+  useEffect(() => {
+    let alive = true;
+    getRates().then((r) => { if (alive) setFx(r); });
+    return () => { alive = false; };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -46,8 +56,8 @@ export function CollectionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!user) { setCards([]); setWishlist([]); return; }
-    const unsubCards = subscribeCards(user.uid, setCards);
+    if (!user) { setRawCards([]); setWishlist([]); return; }
+    const unsubCards = subscribeCards(user.uid, setRawCards);
     const unsubWish = subscribeWishlist(user.uid, setWishlist);
     loadUserDoc(user.uid).then((d) => {
       if (d?.favoritePokemon) setFavoritePokemon(d.favoritePokemon);
@@ -60,6 +70,21 @@ export function CollectionProvider({ children }: { children: ReactNode }) {
     document.documentElement.classList.toggle('light', settings.theme === 'light');
     document.documentElement.classList.toggle('dark', settings.theme === 'dark');
   }, [settings.theme]);
+
+  /**
+   * Converte cada carta com a cotação de hoje, usando o valor original em
+   * dólar/euro. Fazer isso num lugar só significa que Pokédex, detalhe,
+   * coleções e estatísticas acompanham o câmbio sem saber que ele existe.
+   * Cartas antigas, gravadas antes deste campo, mantêm o valor salvo.
+   */
+  const cards = useMemo(
+    () => rawCards.map((c) =>
+      c.priceOrigin && c.priceCurrency
+        ? { ...c, unitPrice: convert(c.priceOrigin, c.priceCurrency, fx) }
+        : c,
+    ),
+    [rawCards, fx],
+  );
 
   // Agregação por Pokémon. Recalcula só quando as cartas mudam.
   const holdings = useMemo(() => {
@@ -83,7 +108,7 @@ export function CollectionProvider({ children }: { children: ReactNode }) {
     <CollectionContext.Provider
       value={{
         pokedex, cards, wishlist, favoritePokemon, settings,
-        setSettings, setFavoritePokemon, holdings, loadingDex, dexProgress,
+        setSettings, setFavoritePokemon, holdings, loadingDex, dexProgress, fx,
       }}
     >
       {children}

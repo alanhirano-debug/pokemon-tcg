@@ -5,12 +5,13 @@ import { importCards, saveSettings } from '@/services/collectionService';
 import { exportBackup, readBackup } from '@/services/exportService';
 import { clearPokedexCache } from '@/services/pokeapi';
 import { SPRITE_STYLE_OPTIONS } from '@/services/sprites';
+import { sinceLabel } from '@/services/exchange';
 import { PokemonSprite } from '@/components/pokedex/PokemonSprite';
 import type { SpriteStyle, UserSettings } from '@/types';
 
 export function SettingsPage() {
   const { user, logout } = useAuth();
-  const { settings, setSettings, cards } = useCollection();
+  const { settings, setSettings, cards, fx } = useCollection();
   const fileRef = useRef<HTMLInputElement>(null);
 
   function patch(next: Partial<UserSettings>) {
@@ -60,6 +61,24 @@ export function SettingsPage() {
           checked={settings.animatedSprites}
           onChange={(v) => patch({ animatedSprites: v })}
         />
+      </Section>
+
+      <Section title="Cotação" hint="Os preços vêm em dólar e euro e são convertidos na hora de exibir.">
+        <div className="grid grid-cols-2 gap-3">
+          <div className="rounded-xl border border-white/10 p-3">
+            <p className="text-[11px] uppercase tracking-wider text-mist">Dólar</p>
+            <p className="font-display text-lg font-bold">R$ {fx.usd.toFixed(2)}</p>
+          </div>
+          <div className="rounded-xl border border-white/10 p-3">
+            <p className="text-[11px] uppercase tracking-wider text-mist">Euro</p>
+            <p className="font-display text-lg font-bold">R$ {fx.eur.toFixed(2)}</p>
+          </div>
+        </div>
+        <p className="text-xs text-mist">
+          {fx.live
+            ? `Atualizada ${sinceLabel(fx.updatedAt)}. Uma consulta por dia.`
+            : 'Sem conexão com o serviço de câmbio — usando a última cotação conhecida.'}
+        </p>
       </Section>
 
       <Section title="Aparência">
