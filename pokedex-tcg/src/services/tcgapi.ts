@@ -20,7 +20,7 @@ export interface TcgCard {
   hp?: string;
   types?: string[];
   images: { small: string; large: string };
-  set: { id: string; name: string; series: string; printedTotal: number; total: number; releaseDate: string; images: { symbol: string; logo: string } };
+  set: { id: string; name: string; series: string; ptcgoCode?: string; printedTotal: number; total: number; releaseDate: string; images: { symbol: string; logo: string } };
   nationalPokedexNumbers?: number[];
   tcgplayer?: { prices?: Record<string, { market?: number; mid?: number; low?: number }> };
   cardmarket?: { prices?: { averageSellPrice?: number; trendPrice?: number } };
@@ -100,12 +100,24 @@ export async function findByNameAndNumber(name: string, number?: string, setId?:
   return searchCards(parts.join(' '), 1, 12);
 }
 
+/**
+ * Identificação exata: coleção + número impresso.
+ * Não depende de foto, luz nem OCR — é a forma mais confiável de
+ * cadastrar uma carta, e costuma ser mais rápida que insistir na câmera.
+ */
+export async function findBySetAndNumber(setId: string, number: string) {
+  const limpo = number.trim().replace(/^0+(?=\d)/, '');
+  if (!setId || !limpo) return [];
+  return searchCards(`set.id:${sanitizar(setId)} number:${sanitizar(limpo)}`, 1, 12);
+}
+
 export async function listSets(): Promise<TcgSet[]> {
   const sets = await request<TcgCard['set'][]>('/sets?orderBy=-releaseDate&pageSize=250');
   return sets.map((s) => ({
     id: s.id,
     name: s.name,
     series: s.series,
+    ptcgoCode: s.ptcgoCode,
     total: s.total,
     printedTotal: s.printedTotal,
     releaseDate: s.releaseDate,

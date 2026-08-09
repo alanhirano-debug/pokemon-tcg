@@ -107,19 +107,27 @@ Depois disso, cada `git push` na branch principal republica o site.
 
 ---
 
-## Como funciona o fluxo de escanear
+## Como funciona o cadastro
 
-Uma leitura, várias cópias:
+Coleção e número identificam a carta exata — o par é único dentro de cada
+expansão, então não há chute nenhum:
 
-1. **Escanear** — abre a câmera traseira e captura um frame.
-2. **Reconhecer** — o OCR roda em duas faixas apenas: nome (topo) e número impresso (rodapé). Ler a carta inteira seria mais lento e traria o ruído do texto de ataques.
-3. **Buscar** — nome + número consultam a Pokémon TCG API. Mais de um resultado, você escolhe entre as versões.
-4. **Confirmar** — imagem, coleção, número, raridade, preço atualizado, e o seletor `−  1  +`.
-5. **Adicionar** — se você já tem aquele exemplar exato (mesmo card, condição, idioma, reverse), o app **soma a quantidade** em vez de criar uma linha duplicada.
+1. **Filtrar a coleção** pela sigla impressa no rodapé da carta (MEG, OBF,
+   SVI) ou pelo nome.
+2. **Digitar o número** antes da barra. Em `001/132`, digite `001`.
+3. **Confirmar** — imagem, raridade, preço convertido pelo dólar do dia, e o
+   seletor `−  1  +`.
+4. **Adicionar** — se você já tem aquele exemplar exato (mesmo card, condição,
+   idioma, reverse), o app **soma a quantidade** em vez de criar uma linha
+   duplicada.
 
-O reconhecimento por OCR é *best-effort*: iluminação ruim, sleeve refletindo ou arte full-art atrapalham. Por isso a busca por nome digitado está sempre disponível na mesma tela — não é um plano B escondido.
+O número não distingue acabamento: uma carta normal e a mesma em *reverse
+holo* compartilham o número. Por isso a opção fica na tela de confirmação.
 
----
+Houve uma tentativa de reconhecimento por câmera com OCR. Ela foi removida:
+dentro do navegador, a leitura depende demais de luz, foco e fundo para ser
+confiável. Reconhecimento de verdade exige comparação de imagem contra um
+índice das cartas, que é outro projeto.
 
 ## Dados
 

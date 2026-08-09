@@ -1,6 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom';
 import {
-  BarChart3, Camera, Heart, LayoutGrid, Library, LogOut, Settings, Star,
+  BarChart3, Heart, LayoutGrid, Library, LogOut, Plus, Settings, Star,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -51,7 +51,7 @@ export function AppShell() {
           to="/adicionar"
           className="mb-3 flex items-center justify-center gap-2 rounded-xl bg-flame px-3 py-2.5 font-display text-sm font-bold shadow-glow transition hover:bg-flame-soft"
         >
-          <Camera size={17} /> Escanear carta
+          <Plus size={17} /> Adicionar carta
         </NavLink>
 
         <button
@@ -76,9 +76,9 @@ export function AppShell() {
         <NavLink
           to="/adicionar"
           className="-mt-6 grid h-14 w-14 place-items-center rounded-full bg-flame shadow-glow"
-          aria-label="Escanear carta"
+          aria-label="Adicionar carta"
         >
-          <Camera size={24} />
+          <Plus size={24} />
         </NavLink>
 
         {NAV.slice(4, 6).map(({ to, label, icon: Icon }) => (

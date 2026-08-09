@@ -75,6 +75,8 @@ export interface TcgSet {
   id: string;
   name: string;
   series: string;
+  /** Sigla impressa no rodapé da carta, ao lado do número (MEG, OBF, SVI). */
+  ptcgoCode?: string;
   total: number;
   printedTotal: number;
   releaseDate: string;

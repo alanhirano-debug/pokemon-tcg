@@ -1,37 +1,28 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Camera, Check, ImagePlus, Info, Minus, Plus, RotateCcw, Search, Sparkles } from 'lucide-react';
+import { Check, Info, Minus, Plus, RotateCcw, Search, Sparkles } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useCollection } from '@/contexts/CollectionContext';
 import { PokemonSprite } from '@/components/pokedex/PokemonSprite';
+import { BuscaPorNumero } from '@/components/cards/BuscaPorNumero';
 import { addCards } from '@/services/collectionService';
-import { findByNameAndNumber, searchCards, toOwnedCard, type TcgCard } from '@/services/tcgapi';
-import { FULL_FRAME, readCardText, readWholeCard, type Rect } from '@/services/cardRecognition';
-import { resolverNome } from '@/services/nameMatch';
+import { searchCards, toOwnedCard, type TcgCard } from '@/services/tcgapi';
 import { CONDITION_LABEL, LANGUAGE_LABEL, brl, dexNumber } from '@/lib/format';
 import type { CardCondition, CardLanguage, SpriteStyle } from '@/types';
 
-type Step = 'scan' | 'picking' | 'confirm' | 'done';
+type Step = 'buscar' | 'picking' | 'confirm' | 'done';
 
 export function AddCardPage() {
   const { user } = useAuth();
   const { cards, pokedex, settings, fx } = useCollection();
   const navigate = useNavigate();
 
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const guideRef = useRef<HTMLDivElement>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-
-  const [step, setStep] = useState<Step>('scan');
+  const [step, setStep] = useState<Step>('buscar');
   const [status, setStatus] = useState<string | null>(null);
   const [matches, setMatches] = useState<TcgCard[]>([]);
   const [selected, setSelected] = useState<TcgCard | null>(null);
   const [manual, setManual] = useState('');
-  const [cameraReady, setCameraReady] = useState(false);
-  const [busy, setBusy] = useState(false);
-  /** Texto cru do OCR — só aparece quando a leitura falha, para diagnóstico. */
-  const [ocrDebug, setOcrDebug] = useState<string | null>(null);
+  const [buscando, setBuscando] = useState(false);
 
   // Dados do exemplar — escolhidos uma vez, valem para todas as cópias
   const [quantity, setQuantity] = useState(1);
@@ -43,202 +34,6 @@ export function AddCardPage() {
   // Firestore atualiza `cards` e o Pokémon deixaria de parecer inédito.
   const [wasNewToDex, setWasNewToDex] = useState(false);
 
-  useEffect(() => {
-    if (step !== 'scan') return;
-    let cancelled = false;
-
-    async function abrirCamera() {
-      // Sem HTTPS o navegador nem expõe a API — e o erro que isso gerava
-      // antes era um crash silencioso, com a tela em branco.
-      if (!window.isSecureContext) {
-        setStatus('A câmera exige HTTPS. Abra o app pelo endereço publicado (Netlify/Vercel) ou por localhost — pelo IP da rede local o navegador bloqueia.');
-        return;
-      }
-      if (!navigator.mediaDevices?.getUserMedia) {
-        setStatus('Este navegador não expõe a câmera. No iPhone, use o Safari; no Android, o Chrome.');
-        return;
-      }
-
-      // Primeiro a traseira; se o aparelho recusar a restrição, qualquer uma.
-      const tentativas: MediaStreamConstraints[] = [
-        { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 } } },
-        { video: { facingMode: 'environment' } },
-        { video: true },
-      ];
-
-      for (const constraints of tentativas) {
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia(constraints);
-          if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
-          streamRef.current = stream;
-          if (videoRef.current) {
-            videoRef.current.srcObject = stream;
-            await videoRef.current.play().catch(() => undefined);
-          }
-          setCameraReady(true);
-          setStatus(null);
-          return;
-        } catch (err: any) {
-          if (err?.name === 'NotAllowedError' || err?.name === 'SecurityError') {
-            setStatus('Permissão de câmera negada. Toque no cadeado ao lado do endereço e libere a câmera para este site.');
-            return;
-          }
-          if (err?.name === 'NotFoundError') {
-            setStatus('Nenhuma câmera encontrada neste aparelho.');
-            return;
-          }
-          if (err?.name === 'NotReadableError') {
-            setStatus('A câmera está ocupada por outro app. Feche-o e tente de novo.');
-            return;
-          }
-          // OverconstrainedError e afins: cai para a próxima tentativa.
-        }
-      }
-
-      setStatus('Não consegui abrir a câmera. Use a foto da galeria abaixo — funciona igual.');
-    }
-
-    abrirCamera();
-
-    return () => {
-      cancelled = true;
-      streamRef.current?.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-      setCameraReady(false);
-    };
-  }, [step]);
-
-  /**
-   * Converte a moldura que o usuário vê em coordenadas do frame real.
-   * O vídeo aparece com object-cover, então parte dele fica fora da tela —
-   * medir os dois elementos é o único jeito de recortar exatamente o que
-   * está dentro da moldura.
-   */
-  function molduraNoFrame(video: HTMLVideoElement): Rect {
-    const guide = guideRef.current;
-    if (!guide) return FULL_FRAME;
-
-    const vBox = video.getBoundingClientRect();
-    const gBox = guide.getBoundingClientRect();
-    const escala = Math.max(vBox.width / video.videoWidth, vBox.height / video.videoHeight);
-
-    const sobraX = (video.videoWidth * escala - vBox.width) / 2;
-    const sobraY = (video.videoHeight * escala - vBox.height) / 2;
-
-    return {
-      x: (gBox.left - vBox.left + sobraX) / escala / video.videoWidth,
-      y: (gBox.top - vBox.top + sobraY) / escala / video.videoHeight,
-      w: gBox.width / escala / video.videoWidth,
-      h: gBox.height / escala / video.videoHeight,
-    };
-  }
-
-  async function capture() {
-    const video = videoRef.current;
-    if (!video || !video.videoWidth) {
-      setStatus('A câmera ainda não está pronta. Aguarde um instante.');
-      return;
-    }
-
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    canvas.getContext('2d')?.drawImage(video, 0, 0);
-
-    await reconhecer(canvas, molduraNoFrame(video));
-  }
-
-  /** Foto da galeria ou da câmera nativa — caminho alternativo completo. */
-  async function usarFoto(file: File) {
-    const bitmap = await createImageBitmap(file);
-    const canvas = document.createElement('canvas');
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
-    canvas.getContext('2d')?.drawImage(bitmap, 0, 0);
-    bitmap.close();
-
-    await reconhecer(canvas, FULL_FRAME);
-  }
-
-  async function reconhecer(canvas: HTMLCanvasElement, area: Rect) {
-    setBusy(true);
-    setOcrDebug(null);
-    setStatus('Lendo a carta…');
-
-    try {
-      // Primeira tentativa: as faixas dentro da moldura.
-      let leitura = await readCardText(canvas, area);
-      let nome = leitura.name ? resolverNome(leitura.name, pokedex) : null;
-
-      // O texto lido não parece nenhum Pokémon conhecido. Isso acontece
-      // quando a carta não preenche a moldura e a faixa cai no fundo da
-      // foto — então vale reler a imagem inteira antes de desistir.
-      if (!nome) {
-        const completa = await readWholeCard(canvas);
-        const alternativa = completa.name ? resolverNome(completa.name, pokedex) : null;
-        if (alternativa) {
-          leitura = completa;
-          nome = alternativa;
-        }
-      }
-
-      if (!nome) {
-        setStatus('Não reconheci nenhum Pokémon na imagem. Encoste mais, deixando a carta preencher a moldura inteira.');
-        setOcrDebug(leitura.raw);
-        return;
-      }
-
-      // Confiança baixa: avisa qual leitura foi usada, para você conferir.
-      if (nome.confianca < 0.9) {
-        setStatus(`Li como "${nome.pokemon}". Se não for, use a busca por nome.`);
-      } else {
-        setStatus(null);
-      }
-
-      let resultados = await findByNameAndNumber(nome.consulta, leitura.number ?? undefined);
-      if (resultados.length === 0 && leitura.number) {
-        resultados = await findByNameAndNumber(nome.consulta);
-      }
-      if (resultados.length === 0 && nome.consulta !== nome.pokemon) {
-        resultados = await findByNameAndNumber(nome.pokemon);
-      }
-
-      handleResults(resultados, nome.pokemon);
-      if (resultados.length === 0) setOcrDebug(leitura.raw);
-    } catch (err: any) {
-      setStatus(err?.message ?? 'A leitura falhou. Tente a busca por nome.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function searchManually() {
-    if (!manual.trim()) return;
-    setOcrDebug(null);
-    setStatus('Buscando…');
-    try {
-      const results = await searchCards(`name:"${manual.trim()}*"`);
-      setStatus(null);
-      handleResults(results, manual);
-    } catch {
-      setStatus('A busca falhou. Verifique sua conexão.');
-    }
-  }
-
-  function handleResults(results: TcgCard[], term: string) {
-    if (results.length === 0) {
-      setStatus(`Nenhuma carta encontrada para "${term}".`);
-      return;
-    }
-    if (results.length === 1) {
-      setSelected(results[0]);
-      setStep('confirm');
-      return;
-    }
-    setMatches(results);
-    setStep('picking');
-  }
-
   // Situação do Pokémon desta carta na Pokédex do usuário.
   const pokedexId = selected?.nationalPokedexNumbers?.[0] ?? 0;
   const dexEntry = pokedex.find((p) => p.id === pokedexId);
@@ -246,6 +41,36 @@ export function AddCardPage() {
   const copiesOfPokemon = ownedOfPokemon.reduce((sum, c) => sum + c.quantity, 0);
   const isNewToDex = pokedexId > 0 && ownedOfPokemon.length === 0;
   const hasNoDexEntry = Boolean(selected) && pokedexId === 0;
+
+  function handleResults(resultados: TcgCard[], termo: string) {
+    if (resultados.length === 0) {
+      setStatus(`Nenhuma carta encontrada para "${termo}".`);
+      return;
+    }
+    if (resultados.length === 1) {
+      setSelected(resultados[0]);
+      setStep('confirm');
+      return;
+    }
+    // Mesmo número pode ter variações (normal e reverse, por exemplo).
+    setMatches(resultados);
+    setStep('picking');
+  }
+
+  async function buscarPorNome() {
+    if (!manual.trim()) return;
+    setBuscando(true);
+    setStatus('Buscando…');
+    try {
+      const resultados = await searchCards(`name:"${manual.trim()}*"`);
+      setStatus(null);
+      handleResults(resultados, manual);
+    } catch (err: any) {
+      setStatus(err?.message ?? 'A busca falhou. Verifique sua conexão.');
+    } finally {
+      setBuscando(false);
+    }
+  }
 
   async function confirmAdd() {
     if (!user || !selected) return;
@@ -260,100 +85,42 @@ export function AddCardPage() {
     setMatches([]);
     setQuantity(1);
     setStatus(null);
-    setOcrDebug(null);
     setWasNewToDex(false);
-    setStep('scan');
+    setStep('buscar');
   }
 
-  // ── Passo 1: câmera ───────────────────────────────────────
-  if (step === 'scan') {
+  // ── Passo 1: identificar a carta ─────────────────────────
+  if (step === 'buscar') {
     return (
       <div className="mx-auto max-w-md space-y-4">
-        <Header title="Escanear carta" hint="Encaixe a carta na moldura. Uma leitura só — a quantidade você escolhe depois." />
-
-        <div className="relative aspect-[3/4] overflow-hidden rounded-2xl border border-white/10 bg-ink-900">
-          <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-cover" />
-
-          {/* A moldura tem a proporção real de uma carta (63x88mm). O recorte
-              do OCR é medido a partir dela, então o que você encaixa aqui é
-              exatamente o que é lido. */}
-          <div className="pointer-events-none absolute inset-0 grid place-items-center">
-            <div
-              ref={guideRef}
-              className="relative aspect-[63/88] h-[86%] rounded-xl border-2 border-flame/70"
-            >
-              <div className="absolute inset-x-0 top-1/2 h-0.5 bg-flame/70 animate-scan-line" />
-            </div>
-          </div>
-
-          {!cameraReady && (
-            <div className="absolute inset-0 grid place-items-center bg-ink-900/85 px-6 text-center">
-              <p className="text-sm text-mist">
-                {status ?? 'Abrindo a câmera…'}
-              </p>
-            </div>
-          )}
-        </div>
-
-        {cameraReady && status && <p className="text-center text-sm text-gold">{status}</p>}
-
-        <div className="flex items-center justify-center gap-6">
-          <button
-            onClick={() => fileRef.current?.click()}
-            className="grid h-12 w-12 place-items-center rounded-2xl border border-white/10 bg-ink-600 transition hover:border-white/25"
-            aria-label="Usar foto da galeria"
-          >
-            <ImagePlus size={20} />
-          </button>
-
-          <button
-            onClick={capture}
-            disabled={!cameraReady || busy}
-            className="flex h-16 w-16 items-center justify-center rounded-full bg-flame shadow-glow transition hover:bg-flame-soft disabled:opacity-40"
-            aria-label="Capturar carta"
-          >
-            <Camera size={26} />
-          </button>
-
-          <div className="h-12 w-12" aria-hidden />
-        </div>
-
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/*"
-          hidden
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) usarFoto(file);
-            e.target.value = '';
-          }}
+        <Header
+          title="Adicionar carta"
+          hint="Coleção e número identificam a carta exata. A quantidade você escolhe depois."
         />
 
-        <p className="text-center text-xs text-mist">
-          Sem câmera? O botão da esquerda aceita uma foto da carta.
-        </p>
+        <BuscaPorNumero
+          onResultados={handleResults}
+          onErro={(mensagem) => setStatus(mensagem)}
+        />
 
-        {ocrDebug && (
-          <details className="panel p-3 text-xs">
-            <summary className="cursor-pointer text-mist">O que o app leu na carta</summary>
-            <pre className="mt-2 whitespace-pre-wrap break-words font-dex text-[10px] text-mist">
-              {ocrDebug}
-            </pre>
-          </details>
-        )}
+        {status && <p className="text-center text-sm text-gold">{status}</p>}
 
         <div className="panel space-y-2 p-4">
-          <p className="text-xs text-mist">Prefere digitar?</p>
+          <p className="text-xs text-mist">Não achou pelo número? Busque pelo nome:</p>
           <div className="flex gap-2">
             <input
               value={manual}
               onChange={(e) => setManual(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && searchManually()}
-              placeholder="Nome da carta, ex. Charizard ex"
+              onKeyDown={(e) => e.key === 'Enter' && buscarPorNome()}
+              placeholder="Ex. Charizard ex"
               className="flex-1 rounded-xl border border-white/10 bg-ink-800 px-3 py-2.5 text-sm outline-none focus:border-flame/60"
             />
-            <button onClick={searchManually} className="rounded-xl bg-ink-500 px-4 transition hover:bg-ink-400" aria-label="Buscar">
+            <button
+              onClick={buscarPorNome}
+              disabled={buscando}
+              className="rounded-xl bg-ink-500 px-4 transition hover:bg-ink-400 disabled:opacity-40"
+              aria-label="Buscar pelo nome"
+            >
               <Search size={16} />
             </button>
           </div>
@@ -362,11 +129,11 @@ export function AddCardPage() {
     );
   }
 
-  // ── Passo 2: escolher entre versões parecidas ─────────────
+  // ── Passo 2: escolher entre variações do mesmo número ────
   if (step === 'picking') {
     return (
       <div className="mx-auto max-w-md space-y-4">
-        <Header title="Qual é a sua?" hint="Encontrei mais de uma versão dessa carta." />
+        <Header title="Qual é a sua?" hint="Esse número tem mais de uma variação." />
         <ul className="grid grid-cols-2 gap-3">
           {matches.map((card) => (
             <li key={card.id}>
@@ -382,13 +149,13 @@ export function AddCardPage() {
           ))}
         </ul>
         <button onClick={restart} className="mx-auto flex items-center gap-1.5 text-sm text-mist hover:text-white">
-          <RotateCcw size={14} /> Escanear de novo
+          <RotateCcw size={14} /> Buscar outra
         </button>
       </div>
     );
   }
 
-  // ── Passo 3: confirmar e definir quantidade ───────────────
+  // ── Passo 3: confirmar e definir quantidade ─────────────
   if (step === 'confirm' && selected) {
     const unit = toOwnedCard(selected, {}, fx).unitPrice;
     return (
@@ -457,13 +224,13 @@ export function AddCardPage() {
           Adicionar à coleção
         </button>
         <button onClick={restart} className="mx-auto flex items-center gap-1.5 text-sm text-mist hover:text-white">
-          <RotateCcw size={14} /> Escanear novamente
+          <RotateCcw size={14} /> Buscar outra
         </button>
       </div>
     );
   }
 
-  // ── Passo 4: adicionado ──────────────────────────────────
+  // ── Passo 4: adicionado ─────────────────────────────────
   return (
     <div className="mx-auto grid min-h-[60vh] max-w-md place-items-center text-center">
       <div className="animate-dex-in">
@@ -499,10 +266,10 @@ export function AddCardPage() {
 
         <div className="mt-6 flex flex-col gap-2">
           <button onClick={restart} className="rounded-xl bg-flame px-5 py-2.5 font-display font-bold">
-            Escanear outra
+            Adicionar outra
           </button>
           <button
-            onClick={() => navigate(`/pokemon/${selected?.nationalPokedexNumbers?.[0] ?? ''}`)}
+            onClick={() => navigate(`/pokemon/${pokedexId}`)}
             className="rounded-xl border border-white/10 px-5 py-2.5 text-sm"
           >
             Ver na Pokédex
