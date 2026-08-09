@@ -6,7 +6,8 @@ import { useCollection } from '@/contexts/CollectionContext';
 import { PokemonSprite } from '@/components/pokedex/PokemonSprite';
 import { addCards } from '@/services/collectionService';
 import { findByNameAndNumber, searchCards, toOwnedCard, type TcgCard } from '@/services/tcgapi';
-import { FULL_FRAME, readCardText, type Rect } from '@/services/cardRecognition';
+import { FULL_FRAME, readCardText, readWholeCard, type Rect } from '@/services/cardRecognition';
+import { resolverNome } from '@/services/nameMatch';
 import { CONDITION_LABEL, LANGUAGE_LABEL, brl, dexNumber } from '@/lib/format';
 import type { CardCondition, CardLanguage, SpriteStyle } from '@/types';
 
@@ -165,25 +166,47 @@ export function AddCardPage() {
     setStatus('Lendo a carta…');
 
     try {
-      const leitura = await readCardText(canvas, area);
+      // Primeira tentativa: as faixas dentro da moldura.
+      let leitura = await readCardText(canvas, area);
+      let nome = leitura.name ? resolverNome(leitura.name, pokedex) : null;
 
-      if (!leitura.name) {
-        setStatus('Não consegui ler o nome. Aproxime a carta, melhore a luz, ou busque pelo nome abaixo.');
+      // O texto lido não parece nenhum Pokémon conhecido. Isso acontece
+      // quando a carta não preenche a moldura e a faixa cai no fundo da
+      // foto — então vale reler a imagem inteira antes de desistir.
+      if (!nome) {
+        const completa = await readWholeCard(canvas);
+        const alternativa = completa.name ? resolverNome(completa.name, pokedex) : null;
+        if (alternativa) {
+          leitura = completa;
+          nome = alternativa;
+        }
+      }
+
+      if (!nome) {
+        setStatus('Não reconheci nenhum Pokémon na imagem. Encoste mais, deixando a carta preencher a moldura inteira.');
         setOcrDebug(leitura.raw);
         return;
       }
 
-      // Primeiro com o número (mais preciso); sem resultado, só o nome.
-      let resultados = await findByNameAndNumber(leitura.name, leitura.number ?? undefined);
-      if (resultados.length === 0 && leitura.number) {
-        resultados = await findByNameAndNumber(leitura.name);
+      // Confiança baixa: avisa qual leitura foi usada, para você conferir.
+      if (nome.confianca < 0.9) {
+        setStatus(`Li como "${nome.pokemon}". Se não for, use a busca por nome.`);
+      } else {
+        setStatus(null);
       }
 
-      setStatus(null);
-      handleResults(resultados, leitura.name);
+      let resultados = await findByNameAndNumber(nome.consulta, leitura.number ?? undefined);
+      if (resultados.length === 0 && leitura.number) {
+        resultados = await findByNameAndNumber(nome.consulta);
+      }
+      if (resultados.length === 0 && nome.consulta !== nome.pokemon) {
+        resultados = await findByNameAndNumber(nome.pokemon);
+      }
+
+      handleResults(resultados, nome.pokemon);
       if (resultados.length === 0) setOcrDebug(leitura.raw);
     } catch (err: any) {
-      setStatus(`A leitura falhou: ${err?.message ?? 'erro desconhecido'}. Tente a busca por nome.`);
+      setStatus(err?.message ?? 'A leitura falhou. Tente a busca por nome.');
     } finally {
       setBusy(false);
     }

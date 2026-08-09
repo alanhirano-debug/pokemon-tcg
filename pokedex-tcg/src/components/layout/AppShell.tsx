@@ -63,7 +63,7 @@ export function AppShell() {
         </button>
       </aside>
 
-      <main className="min-w-0 px-4 pb-24 pt-5 lg:px-7 lg:pb-8">
+      <main className="min-w-0 px-4 pb-32 pt-5 lg:px-7 lg:pb-8">
         <Outlet />
       </main>
 

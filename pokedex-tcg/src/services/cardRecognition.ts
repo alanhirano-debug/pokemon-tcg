@@ -121,9 +121,8 @@ export async function readCardText(
     raw: `nome: ${nameText.trim()} | número: ${numberText.trim()}`,
   };
 
-  // Faixa errada por enquadramento torto: tenta a carta inteira.
-  if (!reading.name) return readWholeCard(source);
-
+  // Quem chama decide se vale tentar a imagem inteira — assim o OCR
+  // pesado não roda duas vezes quando a primeira leitura já serve.
   return reading;
 }
 

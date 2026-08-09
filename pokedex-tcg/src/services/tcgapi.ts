@@ -26,11 +26,40 @@ export interface TcgCard {
   cardmarket?: { prices?: { averageSellPrice?: number; trendPrice?: number } };
 }
 
-async function request<T>(path: string): Promise<T> {
+/**
+ * Requisição com repetição em erro de servidor.
+ * A Pokémon TCG API devolve 5xx com alguma frequência sob carga — e uma
+ * falha dessas não é motivo para o usuário refazer a foto.
+ */
+async function request<T>(path: string, tentativa = 1): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { headers: headers() });
-  if (!res.ok) throw new Error(`TCG API ${res.status}: ${res.statusText}`);
+
+  if (res.status >= 500 && tentativa < 3) {
+    await new Promise((r) => setTimeout(r, 600 * tentativa));
+    return request<T>(path, tentativa + 1);
+  }
+
+  if (res.status === 429) {
+    throw new Error(
+      'Limite de consultas da API atingido. Cadastre uma chave gratuita em dev.pokemontcg.io para liberar mais buscas.',
+    );
+  }
+
+  if (!res.ok) {
+    throw new Error(
+      res.status >= 500
+        ? 'O serviço de cartas está instável agora. Tente de novo em instantes.'
+        : `Consulta recusada pela API (${res.status}).`,
+    );
+  }
+
   const json = await res.json();
   return json.data as T;
+}
+
+/** Aspas e barras soltas quebram a sintaxe de busca e geram erro 500. */
+function sanitizar(valor: string): string {
+  return valor.replace(/[^A-Za-zÀ-ÿ0-9 .'-]/g, ' ').replace(/\s{2,}/g, ' ').trim();
 }
 
 /**
@@ -62,9 +91,12 @@ export async function getCard(tcgId: string) {
 
 /** Busca por nome + número impresso — é o que o scanner consegue ler da carta. */
 export async function findByNameAndNumber(name: string, number?: string, setId?: string) {
-  const parts = [`name:"${name}"`];
-  if (number) parts.push(`number:${number}`);
-  if (setId) parts.push(`set.id:${setId}`);
+  const limpo = sanitizar(name);
+  if (!limpo) return [];
+
+  const parts = [`name:"${limpo}"`];
+  if (number) parts.push(`number:${sanitizar(number)}`);
+  if (setId) parts.push(`set.id:${sanitizar(setId)}`);
   return searchCards(parts.join(' '), 1, 12);
 }
 
