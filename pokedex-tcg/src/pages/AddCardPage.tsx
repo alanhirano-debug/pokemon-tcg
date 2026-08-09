@@ -94,8 +94,8 @@ export function AddCardPage() {
     return (
       <div className="mx-auto max-w-md space-y-4">
         <Header
-          title="Adicionar carta"
-          hint="Coleção e número identificam a carta exata. A quantidade você escolhe depois."
+          title="Adicionar carta à coleção"
+          hint="Escolha a coleção e digite o número do rodapé. A quantidade você escolhe depois."
         />
 
         <BuscaPorNumero

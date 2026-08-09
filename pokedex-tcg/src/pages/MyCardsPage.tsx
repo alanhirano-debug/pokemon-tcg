@@ -66,7 +66,7 @@ export function MyCardsPage() {
       {list.length === 0 ? (
         <div className="panel px-6 py-12 text-center">
           <p className="font-display font-semibold">Nada por aqui ainda</p>
-          <p className="mt-1 text-sm text-mist">Escaneie sua primeira carta para começar a coleção.</p>
+          <p className="mt-1 text-sm text-mist">Adicione sua primeira carta pela coleção e pelo número do rodapé.</p>
         </div>
       ) : (
         <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">

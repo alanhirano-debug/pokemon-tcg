@@ -93,9 +93,9 @@ export function PokemonDetailPage() {
         {myCards.length === 0 ? (
           <div className="panel px-6 py-12 text-center">
             <p className="font-display font-semibold">Você ainda não tem cartas do {entry.name}</p>
-            <p className="mt-1 text-sm text-mist">Escaneie uma carta para marcá-lo como obtido na Pokédex.</p>
+            <p className="mt-1 text-sm text-mist">Adicione uma carta dele à coleção para marcá-lo como obtido na Pokédex.</p>
             <Link to="/adicionar" className="mt-4 inline-block rounded-xl bg-flame px-4 py-2 font-display text-sm font-bold">
-              Escanear carta
+              Adicionar carta
             </Link>
           </div>
         ) : (

@@ -51,7 +51,7 @@ export function AppShell() {
           to="/adicionar"
           className="mb-3 flex items-center justify-center gap-2 rounded-xl bg-flame px-3 py-2.5 font-display text-sm font-bold shadow-glow transition hover:bg-flame-soft"
         >
-          <Plus size={17} /> Adicionar carta
+          <Plus size={17} /> Adicionar à coleção
         </NavLink>
 
         <button
