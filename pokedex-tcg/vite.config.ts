@@ -4,6 +4,7 @@ import { VitePWA } from 'vite-plugin-pwa';
 import path from 'node:path';
 
 export default defineConfig({
+  base: '/pokemon-tcg/',
   define: {
     // Carimbo do momento da compilação — aparece no rodapé do app.
     __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
@@ -21,7 +22,8 @@ export default defineConfig({
         background_color: '#0b0b0e',
         display: 'standalone',
         orientation: 'portrait',
-        start_url: '/',
+        start_url: '/pokemon-tcg/',
+        scope: '/pokemon-tcg/',
         icons: [
           { src: 'pwa-192.png', sizes: '192x192', type: 'image/png' },
           { src: 'pwa-512.png', sizes: '512x512', type: 'image/png' },
