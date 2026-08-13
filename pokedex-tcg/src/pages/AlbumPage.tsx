@@ -4,10 +4,10 @@ import { Download, Sparkles } from 'lucide-react';
 import { useCollection } from '@/contexts/CollectionContext';
 import { exportCSV, exportPDF, exportXLSX } from '@/services/exportService';
 import { NIVEL_DESTAQUE, ROTULOS_NIVEL, classificar, type NivelRaridade } from '@/lib/raridade';
-import { brl } from '@/lib/format';
+import { brl, dexNumber } from '@/lib/format';
 import type { OwnedCard } from '@/types';
 
-type Modo = 'destaques' | 'colecao';
+type Modo = 'destaques' | 'colecao' | 'pokedex';
 
 /**
  * O álbum. A Pokédex mostra o que falta; aqui é o oposto — o que você
@@ -45,6 +45,18 @@ export function AlbumPage() {
     () => filtradas
       .filter(({ raridade }) => raridade.nivel < NIVEL_DESTAQUE)
       .sort((a, b) => b.raridade.nivel - a.raridade.nivel || a.card.name.localeCompare(b.card.name)),
+    [filtradas],
+  );
+
+  // Modo Pokédex: todas as cartas juntas, na ordem do número nacional.
+  // Cartas sem vínculo (Treinador, Energia, ou uma que ainda não resolveu
+  // o pokedexId) não têm onde entrar nessa ordem — ficam no fim, agrupadas.
+  const porPokedex = useMemo(
+    () => [...filtradas].sort((a, b) => {
+      const pa = a.card.pokedexId || Infinity;
+      const pb = b.card.pokedexId || Infinity;
+      return pa - pb || a.card.name.localeCompare(b.card.name);
+    }),
     [filtradas],
   );
 
@@ -111,8 +123,8 @@ export function AlbumPage() {
         </div>
       </header>
 
-      <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-ink-700 p-1 sm:max-w-xs">
-        {([['destaques', 'Destaques'], ['colecao', 'Por coleção']] as const).map(([valor, rotulo]) => (
+      <div className="grid grid-cols-3 gap-2 rounded-2xl border border-white/10 bg-ink-700 p-1 sm:max-w-md">
+        {([['destaques', 'Destaques'], ['colecao', 'Por coleção'], ['pokedex', 'Nº Pokédex']] as const).map(([valor, rotulo]) => (
           <button
             key={valor}
             onClick={() => setModo(valor)}
@@ -189,7 +201,7 @@ export function AlbumPage() {
             </p>
           )}
         </>
-      ) : (
+      ) : modo === 'colecao' ? (
         <div className="space-y-7">
           {porColecao.map(({ id, nome, itens }) => (
             <section key={id}>
@@ -205,6 +217,20 @@ export function AlbumPage() {
             </section>
           ))}
         </div>
+      ) : (
+        <>
+          <ul className="grid grid-cols-3 gap-2.5 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-9">
+            {porPokedex.map((item) => (
+              <CartaAlbumComNumero key={item.card.id} {...item} />
+            ))}
+          </ul>
+
+          {filtradas.length === 0 && (
+            <p className="panel px-6 py-12 text-center text-sm text-mist">
+              Nenhuma carta com esse filtro.
+            </p>
+          )}
+        </>
       )}
     </div>
   );
@@ -217,6 +243,40 @@ function chipClasse(ativo: boolean) {
       ? 'border-flame bg-flame/15 font-semibold text-flame'
       : 'border-white/10 bg-ink-700 hover:border-white/25',
   ].join(' ');
+}
+
+/** Igual à CartaAlbum, mas com o número da Pokédex visível — é a própria
+ *  ordenação do modo "Nº Pokédex", então vale mostrar o número usado. */
+function CartaAlbumComNumero({
+  card, raridade,
+}: {
+  card: OwnedCard;
+  raridade: ReturnType<typeof classificar>;
+}) {
+  return (
+    <li>
+      <Link
+        to={`/pokemon/${card.pokedexId}`}
+        className={[
+          'group block overflow-hidden rounded-xl border bg-ink-700 p-1.5 transition duration-200 hover:-translate-y-1',
+          raridade.moldura,
+        ].join(' ')}
+      >
+        <div className="relative">
+          <img src={card.imageLarge || card.imageSmall} alt={card.name} className="w-full rounded-lg" loading="lazy" />
+          <span className="absolute left-1.5 top-1.5 rounded-full bg-ink-900/90 px-2 py-0.5 font-dex text-[10px] font-bold">
+            {card.pokedexId > 0 ? `#${dexNumber(card.pokedexId)}` : '—'}
+          </span>
+          {card.quantity > 1 && (
+            <span className="absolute right-1.5 top-1.5 rounded-full bg-ink-900/90 px-2 py-0.5 font-dex text-[10px] font-bold">
+              ×{card.quantity}
+            </span>
+          )}
+        </div>
+        <p className="truncate px-1 pb-0.5 pt-1.5 text-[11px] font-medium">{card.name}</p>
+      </Link>
+    </li>
+  );
 }
 
 function CartaAlbum({
@@ -260,3 +320,5 @@ function CartaAlbum({
     </li>
   );
 }
+
+      
