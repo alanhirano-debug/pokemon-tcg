@@ -88,11 +88,37 @@ interface DexCard {
   name: string;
   image?: string;
   rarity?: string;
+  dexId?: number[];
   set?: { id: string; name: string; cardCount?: { official?: number; total?: number } };
 }
 
 /** Número local a partir de "22/94". */
-const numeroLocal = (numero: string) => numero.split('/')[0].trim().replace(/^0+(?=\d)/, '');
+const numeroLocal = (numero: string) => numero.split('/')[0].trim();
+
+/**
+ * Coleções mais antigas não têm zero à esquerda no número ("1"), enquanto
+ * coleções recentes mantêm ("001", "070") — igual ao que já tratamos em
+ * `buscarPorNumero` (tcgdex.ts). Sem isso, uma carta "070/132" virava
+ * "70" aqui e a busca direta (que não aceita variação) sempre falhava com
+ * "não encontrada", mesmo a carta já estando com o setId certo.
+ */
+async function buscarCartaMigracao(setId: string, numero: string): Promise<DexCard | null> {
+  const digitado = numero.trim();
+  const tentativas = [digitado];
+  if (/^\d+$/.test(digitado)) {
+    const semZeros = digitado.replace(/^0+(?=\d)/, '');
+    tentativas.push(semZeros, semZeros.padStart(2, '0'), semZeros.padStart(3, '0'), semZeros.padStart(4, '0'));
+  }
+
+  for (const tentativa of new Set(tentativas)) {
+    // Português primeiro; se a carta não existir em PT, cai para o inglês.
+    const dados =
+      (await json<DexCard>(`${BASE}/pt/cards/${setId}-${tentativa}`)) ??
+      (await json<DexCard>(`${BASE}/en/cards/${setId}-${tentativa}`));
+    if (dados) return dados;
+  }
+  return null;
+}
 
 export async function migrarParaTcgdex(
   uid: string,
@@ -117,18 +143,13 @@ export async function migrarParaTcgdex(
       continue;
     }
 
-    const novoId = `${novoSetId}-${numeroLocal(carta.number)}`;
-
-    // Português primeiro; se a carta não existir em PT, cai para o inglês.
-    const dados =
-      (await json<DexCard>(`${BASE}/pt/cards/${novoId}`)) ??
-      (await json<DexCard>(`${BASE}/en/cards/${novoId}`));
+    const dados = await buscarCartaMigracao(novoSetId, numeroLocal(carta.number));
 
     if (!dados) {
       resultado.falhas.push({
         carta: carta.name,
         colecao: carta.setName,
-        motivo: `Carta ${novoId} não encontrada`,
+        motivo: `Carta ${novoSetId}-${numeroLocal(carta.number)} não encontrada`,
       });
       continue;
     }
@@ -144,6 +165,11 @@ export async function migrarParaTcgdex(
       rarity: dados.rarity ?? carta.rarity,
       imageSmall: dados.image ? `${dados.image}/low.webp` : carta.imageSmall,
       imageLarge: dados.image ? `${dados.image}/high.webp` : carta.imageLarge,
+      // A busca antiga (pokemontcg.io) e alguns caminhos já corrigidos
+      // nesta mesma sessão podiam gravar a carta sem o vínculo com a
+      // Pokédex (pokedexId 0). Como já buscamos o card completo aqui,
+      // aproveitamos para também curar isso.
+      pokedexId: dados.dexId?.[0] ?? carta.pokedexId,
     });
 
     if (carta.tcgId === dados.id && carta.imageSmall.includes('tcgdex')) resultado.jaCorretas += 1;
@@ -156,3 +182,4 @@ export async function migrarParaTcgdex(
   onProgresso?.(cards.length, cards.length);
   return resultado;
 }
+
