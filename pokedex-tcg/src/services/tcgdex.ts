@@ -50,6 +50,8 @@ interface DexSet {
   releaseDate?: string;
   serie?: { id: string; name: string };
   cardCount?: { official?: number; total?: number };
+  /** Sigla impressa no rodapé da carta (ex. "DRI") — só vem no detalhe do set. */
+  abbreviation?: { official?: string };
 }
 
 async function buscar<T>(caminho: string): Promise<T> {
@@ -172,14 +174,42 @@ function atualizarEmSegundoPlano() {
   });
 }
 
+/**
+ * A lista resumida (/sets) não traz a sigla impressa no rodapé da carta
+ * (ex. "DRI") — só o detalhe de cada set tem isso (abbreviation.official).
+ * Este é o caminho de rede, usado só quando a lista embutida no pacote e o
+ * cache local falharam — por isso vale buscar as siglas mesmo custando uma
+ * chamada extra por coleção, com concorrência limitada.
+ */
+async function buscarSigla(id: string): Promise<string | undefined> {
+  try {
+    const detalhe = await buscar<DexSet>(`/sets/${id}`);
+    return detalhe.abbreviation?.official;
+  } catch {
+    return undefined;
+  }
+}
+
 async function baixarColecoes(): Promise<TcgSet[]> {
   const brutos = await buscar<DexSet[]>('/sets');
 
+  const CONCORRENCIA = 8;
+  const siglas: (string | undefined)[] = new Array(brutos.length);
+  let indice = 0;
+  async function trabalhador() {
+    while (indice < brutos.length) {
+      const meu = indice++;
+      siglas[meu] = await buscarSigla(brutos[meu].id);
+    }
+  }
+  await Promise.all(Array.from({ length: CONCORRENCIA }, trabalhador));
+
   const sets: TcgSet[] = brutos
-    .map((s) => ({
+    .map((s, i) => ({
       id: s.id,
       name: s.name,
       series: s.serie?.name ?? '',
+      ptcgoCode: siglas[i],
       total: s.cardCount?.total ?? s.cardCount?.official ?? 0,
       printedTotal: s.cardCount?.official ?? s.cardCount?.total ?? 0,
       releaseDate: s.releaseDate ?? '',
