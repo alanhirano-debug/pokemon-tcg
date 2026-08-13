@@ -15,33 +15,64 @@ import { dirname } from 'node:path';
 const DESTINO = new URL('../src/data/colecoes.json', import.meta.url);
 const URL_API = 'https://api.tcgdex.net/v2/pt/sets';
 const TIMEOUT = 20000;
+const CONCORRENCIA = 8;
 
 const imagemSet = (base) => (base ? `${base}.webp` : '');
 
-async function baixar() {
+async function buscarJson(url) {
   const abortar = new AbortController();
   const relogio = setTimeout(() => abortar.abort(), TIMEOUT);
-
   try {
-    const res = await fetch(URL_API, { signal: abortar.signal });
+    const res = await fetch(url, { signal: abortar.signal });
     if (!res.ok) throw new Error(`API respondeu ${res.status}`);
-    const brutos = await res.json();
-
-    return brutos
-      .map((s) => ({
-        id: s.id,
-        name: s.name,
-        series: s.serie?.name ?? '',
-        total: s.cardCount?.total ?? s.cardCount?.official ?? 0,
-        printedTotal: s.cardCount?.official ?? s.cardCount?.total ?? 0,
-        releaseDate: s.releaseDate ?? '',
-        logo: imagemSet(s.logo),
-        symbol: imagemSet(s.symbol),
-      }))
-      .sort((a, b) => (b.releaseDate ?? '').localeCompare(a.releaseDate ?? ''));
+    return await res.json();
   } finally {
     clearTimeout(relogio);
   }
+}
+
+/**
+ * A lista resumida (/sets) não traz a sigla impressa no rodapé da carta
+ * (ex. "DRI" para Rivais Predestinados) — isso só vem no detalhe de cada
+ * coleção (/sets/{id}, campo abbreviation.official). Por isso buscamos o
+ * detalhe de cada uma, em paralelo com concorrência limitada, só para
+ * extrair essa sigla — o resto dos dados já vem completo na lista.
+ */
+async function buscarSigla(id) {
+  try {
+    const detalhe = await buscarJson(`${URL_API}/${id}`);
+    return detalhe.abbreviation?.official;
+  } catch {
+    return undefined; // busca por nome ainda funciona sem a sigla
+  }
+}
+
+async function baixar() {
+  const brutos = await buscarJson(URL_API);
+
+  const siglas = new Array(brutos.length);
+  let indice = 0;
+  async function trabalhador() {
+    while (indice < brutos.length) {
+      const meu = indice++;
+      siglas[meu] = await buscarSigla(brutos[meu].id);
+    }
+  }
+  await Promise.all(Array.from({ length: CONCORRENCIA }, trabalhador));
+
+  return brutos
+    .map((s, i) => ({
+      id: s.id,
+      name: s.name,
+      series: s.serie?.name ?? '',
+      ptcgoCode: siglas[i],
+      total: s.cardCount?.total ?? s.cardCount?.official ?? 0,
+      printedTotal: s.cardCount?.official ?? s.cardCount?.total ?? 0,
+      releaseDate: s.releaseDate ?? '',
+      logo: imagemSet(s.logo),
+      symbol: imagemSet(s.symbol),
+    }))
+    .sort((a, b) => (b.releaseDate ?? '').localeCompare(a.releaseDate ?? ''));
 }
 
 async function manterExistente() {
