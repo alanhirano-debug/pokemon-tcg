@@ -115,18 +115,30 @@ function adaptarCarta(card: DexCard): TcgCard {
  * Identificação exata: coleção + número impresso.
  * O id de uma carta na TCGdex é {coleção}-{número}, então isto é uma
  * leitura direta — sem consulta, sem sintaxe, sem erro 500.
+ *
+ * O formato do número varia por coleção: sets mais antigos (ex. swsh1,
+ * sm1, bw1) usam o número sem zeros à esquerda ("1"), enquanto sets mais
+ * recentes (ex. sv01, sv10) mantêm o zero à esquerda tal como impresso
+ * ("001", "070"). Por isso tentamos primeiro exatamente o que foi
+ * digitado e, se não achar, tentamos sem os zeros à esquerda.
  */
 export async function buscarPorNumero(setId: string, numero: string): Promise<TcgCard[]> {
-  const limpo = numero.trim().replace(/^0+(?=\d)/, '');
-  if (!setId || !limpo) return [];
+  const digitado = numero.trim();
+  if (!setId || !digitado) return [];
 
-  try {
-    const card = await buscar<DexCard>(`/cards/${setId}-${limpo}`);
-    return [adaptarCarta(card)];
-  } catch (err: any) {
-    if (err?.message === 'NAO_ENCONTRADO') return [];
-    throw err;
+  const semZeros = digitado.replace(/^0+(?=\d)/, '');
+  const tentativas = semZeros !== digitado ? [digitado, semZeros] : [digitado];
+
+  for (const tentativa of tentativas) {
+    try {
+      const card = await buscar<DexCard>(`/cards/${setId}-${tentativa}`);
+      return [adaptarCarta(card)];
+    } catch (err: any) {
+      if (err?.message !== 'NAO_ENCONTRADO') throw err;
+      // tenta a próxima variação de número antes de desistir
+    }
   }
+  return [];
 }
 
 /** Todas as cartas de uma coleção — usado para buscar pelo nome dentro dela. */
