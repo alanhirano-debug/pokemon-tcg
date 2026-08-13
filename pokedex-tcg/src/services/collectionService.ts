@@ -66,6 +66,16 @@ async function confirmarGravacao(ref: ReturnType<typeof doc>, esperado: (data: a
 /**
  * Adiciona cartas. Se o mesmo exemplar (mesmo tcgId + condição + idioma)
  * já existe, apenas soma a quantidade — não cria linha duplicada.
+ *
+ * Também AUTOCURA a linha existente: cartas gravadas antes de alguma
+ * correção na busca (por exemplo, o período em que a busca por nome não
+ * trazia o `pokedexId`) ficam com metadados desatualizados para sempre,
+ * mesmo depois do bug ser corrigido — o usuário adiciona outra cópia, o
+ * app só soma quantidade, e a carta continua "sem Pokémon". Por isso todo
+ * `match` também rescreve nome, coleção, número, raridade, imagens e
+ * `pokedexId` com o que acabou de ser buscado (sempre mais confiável, já
+ * que vem direto da leitura completa da TCGdex — ver `hidratarCartas` e
+ * `buscarPorNumero` em tcgdex.ts).
  */
 export async function addCards(
   uid: string,
@@ -84,13 +94,25 @@ export async function addCards(
   if (match) {
     const novaQuantidade = match.quantity + card.quantity;
     const ref = doc(cardsRef(uid), match.id);
-    await updateDoc(ref, {
+    await updateDoc(ref, semUndefined({
       quantity: novaQuantidade,
       unitPrice: card.unitPrice,
       priceUpdatedAt: Date.now(),
       updatedAt: Date.now(),
-    });
-    await confirmarGravacao(ref, (data) => data.quantity === novaQuantidade);
+      pokedexId: card.pokedexId,
+      name: card.name,
+      setId: card.setId,
+      setName: card.setName,
+      number: card.number,
+      rarity: card.rarity,
+      imageSmall: card.imageSmall,
+      imageLarge: card.imageLarge,
+      artist: card.artist,
+      hp: card.hp,
+      types: card.types,
+      releaseDate: card.releaseDate,
+    }));
+    await confirmarGravacao(ref, (data) => data.quantity === novaQuantidade && data.pokedexId === card.pokedexId);
     return match.id;
   }
 
