@@ -112,6 +112,22 @@ function adaptarCarta(card: DexCard): TcgCard {
 }
 
 /**
+ * Leitura direta de uma carta específica (coleção + número). É o único
+ * endpoint da TCGdex que devolve o card COMPLETO — incluindo `dexId`
+ * (número da Pokédex nacional). A lista resumida de `/sets/{id}` não tem
+ * esse campo; ver `hidratarCartas` abaixo.
+ */
+async function buscarCartaCompleta(setId: string, numero: string | number): Promise<TcgCard | null> {
+  try {
+    const card = await buscar<DexCard>(`/cards/${setId}-${numero}`);
+    return adaptarCarta(card);
+  } catch (err: any) {
+    if (err?.message === 'NAO_ENCONTRADO') return null;
+    throw err;
+  }
+}
+
+/**
  * Identificação exata: coleção + número impresso.
  * O id de uma carta na TCGdex é {coleção}-{número}, então isto é uma
  * leitura direta — sem consulta, sem sintaxe, sem erro 500.
@@ -119,24 +135,25 @@ function adaptarCarta(card: DexCard): TcgCard {
  * O formato do número varia por coleção: sets mais antigos (ex. swsh1,
  * sm1, bw1) usam o número sem zeros à esquerda ("1"), enquanto sets mais
  * recentes (ex. sv01, sv10) mantêm o zero à esquerda tal como impresso
- * ("001", "070"). Por isso tentamos primeiro exatamente o que foi
- * digitado e, se não achar, tentamos sem os zeros à esquerda.
+ * ("001", "070"). A pessoa pode digitar de qualquer um dos dois jeitos —
+ * "70" para uma carta cujo id é "070", ou "070" para uma cujo id é "70" —
+ * então tentamos o que foi digitado, sem zeros à esquerda, e também
+ * preenchido com zeros à esquerda até as larguras mais comuns (2, 3 e 4
+ * dígitos) antes de desistir.
  */
 export async function buscarPorNumero(setId: string, numero: string): Promise<TcgCard[]> {
   const digitado = numero.trim();
   if (!setId || !digitado) return [];
 
-  const semZeros = digitado.replace(/^0+(?=\d)/, '');
-  const tentativas = semZeros !== digitado ? [digitado, semZeros] : [digitado];
+  const tentativas = [digitado];
+  if (/^\d+$/.test(digitado)) {
+    const semZeros = digitado.replace(/^0+(?=\d)/, '');
+    tentativas.push(semZeros, semZeros.padStart(2, '0'), semZeros.padStart(3, '0'), semZeros.padStart(4, '0'));
+  }
 
-  for (const tentativa of tentativas) {
-    try {
-      const card = await buscar<DexCard>(`/cards/${setId}-${tentativa}`);
-      return [adaptarCarta(card)];
-    } catch (err: any) {
-      if (err?.message !== 'NAO_ENCONTRADO') throw err;
-      // tenta a próxima variação de número antes de desistir
-    }
+  for (const tentativa of new Set(tentativas)) {
+    const card = await buscarCartaCompleta(setId, tentativa);
+    if (card) return [card];
   }
   return [];
 }
@@ -147,6 +164,22 @@ export async function cartasDaColecao(setId: string): Promise<TcgCard[]> {
   const cards = dados.cards ?? [];
   // A lista resumida não traz os dados da coleção em cada carta.
   return cards.map((c) => adaptarCarta({ ...c, set: dados }));
+}
+
+/**
+ * A lista resumida de `/sets/{id}` (usada pela busca por nome) não traz
+ * `dexId` — sem isso, `toOwnedCard` grava `pokedexId: 0` e a carta nunca
+ * aparece na página do Pokémon, mesmo entrando na coleção. Depois de
+ * filtrar os resultados por nome, hidrata cada um com o card completo
+ * (`/cards/{coleção}-{número}`) para recuperar o `dexId` antes de exibir
+ * ou salvar. Só hidrata os resultados já filtrados — não a coleção
+ * inteira — então o custo extra é de poucas chamadas, não centenas.
+ */
+export async function hidratarCartas(cards: TcgCard[]): Promise<TcgCard[]> {
+  const hidratadas = await Promise.all(
+    cards.map(async (c) => (await buscarCartaCompleta(c.set.id, c.number)) ?? c),
+  );
+  return hidratadas;
 }
 
 /**
