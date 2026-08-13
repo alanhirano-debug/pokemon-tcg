@@ -7,7 +7,7 @@ import { PokemonSprite } from '@/components/pokedex/PokemonSprite';
 import { BuscaPorNumero } from '@/components/cards/BuscaPorNumero';
 import { addCards } from '@/services/collectionService';
 import { toOwnedCard, type TcgCard } from '@/services/tcgapi';
-import { cartasDaColecao } from '@/services/tcgdex';
+import { cartasDaColecao, hidratarCartas } from '@/services/tcgdex';
 import { CONDITION_LABEL, LANGUAGE_LABEL, brl, dexNumber } from '@/lib/format';
 import type { CardCondition, CardLanguage, SpriteStyle } from '@/types';
 
@@ -76,7 +76,10 @@ export function AddCardPage() {
       }
       const termo = manual.trim().toLowerCase();
       const todas = await cartasDaColecao(ultima);
-      const resultados = todas.filter((c) => c.name.toLowerCase().includes(termo));
+      const encontradas = todas.filter((c) => c.name.toLowerCase().includes(termo));
+      // A lista da coleção não traz o dexId de cada carta — sem isso a
+      // carta seria salva sem vínculo com o Pokémon (ver hidratarCartas).
+      const resultados = await hidratarCartas(encontradas);
       setStatus(null);
       handleResults(resultados, manual);
     } catch (err: any) {
