@@ -3,7 +3,7 @@
 //            users/{uid} (settings, favoritos de Pokémon)
 
 import {
-  collection, doc, deleteDoc, getDoc, onSnapshot, query, setDoc,
+  collection, doc, deleteDoc, getDoc, getDocFromServer, onSnapshot, query, setDoc,
   updateDoc, writeBatch, serverTimestamp, orderBy,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
@@ -41,6 +41,29 @@ export function subscribeWishlist(uid: string, cb: (items: WishlistItem[]) => vo
 }
 
 /**
+ * Com cache offline (persistentLocalCache), o Promise de setDoc/updateDoc
+ * resolve assim que a escrita fica gravada localmente — NÃO espera o
+ * servidor confirmar. Em conexões instáveis (o app já loga reconexões do
+ * canal 'Listen' com frequência), isso pode fazer a tela de "carta
+ * adicionada" aparecer mesmo quando a gravação nunca chegou ao Firestore:
+ * o usuário vê sucesso, mas a carta não aparece de verdade na coleção.
+ * Por isso confirmamos com uma leitura direta ao servidor (sem cache) antes
+ * de considerar a gravação concluída. Se isso falhar, é melhor mostrar erro
+ * e pedir para tentar de novo do que mentir sobre o que foi salvo.
+ */
+async function confirmarGravacao(ref: ReturnType<typeof doc>, esperado: (data: any) => boolean) {
+  try {
+    const snap = await getDocFromServer(ref);
+    if (!snap.exists() || !esperado(snap.data())) {
+      throw new Error('A gravação não foi confirmada pelo servidor. Tente novamente.');
+    }
+  } catch (err: any) {
+    if (err?.message?.includes('não foi confirmada')) throw err;
+    throw new Error('Não consegui confirmar se a carta foi salva. Verifique sua conexão e tente novamente.');
+  }
+}
+
+/**
  * Adiciona cartas. Se o mesmo exemplar (mesmo tcgId + condição + idioma)
  * já existe, apenas soma a quantidade — não cria linha duplicada.
  */
@@ -59,17 +82,21 @@ export async function addCards(
   );
 
   if (match) {
-    await updateDoc(doc(cardsRef(uid), match.id), {
-      quantity: match.quantity + card.quantity,
+    const novaQuantidade = match.quantity + card.quantity;
+    const ref = doc(cardsRef(uid), match.id);
+    await updateDoc(ref, {
+      quantity: novaQuantidade,
       unitPrice: card.unitPrice,
       priceUpdatedAt: Date.now(),
       updatedAt: Date.now(),
     });
+    await confirmarGravacao(ref, (data) => data.quantity === novaQuantidade);
     return match.id;
   }
 
   const ref = doc(cardsRef(uid));
   await setDoc(ref, semUndefined(card));
+  await confirmarGravacao(ref, (data) => data.tcgId === card.tcgId);
   return ref.id;
 }
 
