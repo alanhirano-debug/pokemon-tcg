@@ -1,226 +1,367 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Search } from 'lucide-react';
-import { aquecerCacheDaColecao, buscarPorNumero, listarColecoes } from '@/services/tcgdex';
-import type { TcgCard } from '@/services/tcgapi';
+// ─────────────────────────────────────────────────────────────
+// TCGdex — fonte principal de dados de cartas
+//
+// Por que trocar: a pokemontcg.io passou a fazer parte da Scrydex e vem
+// devolvendo 500 de forma intermitente. Além disso ela só cataloga cartas
+// em inglês — e as suas são em português, então a arte exibida nunca era
+// a da carta que você tem na mão.
+//
+// A TCGdex é gratuita, sem chave, e o idioma vai na URL: /v2/pt/.
+// A busca por número aqui é um acesso DIRETO ao recurso
+// (/cards/{colecao}-{numero}), não uma consulta com sintaxe de busca —
+// bem menos frágil que o modelo anterior.
+//
+// As funções devolvem exatamente o mesmo formato que o app já consome,
+// então nenhuma tela precisou mudar.
+// ─────────────────────────────────────────────────────────────
+
+import { get, set as idbSet } from 'idb-keyval';
 import type { TcgSet } from '@/types';
+import type { TcgCard } from './tcgapi';
+import colecoesEmbutidas from '@/data/colecoes.json';
 
-/** Última coleção usada, para o próximo cadastro já começar nela. */
-const CHAVE_ULTIMA = 'pokedex-tcg:ultima-colecao';
+const IDIOMA = 'pt';
+const BASE = `https://api.tcgdex.net/v2/${IDIOMA}`;
+const TIMEOUT_MS = 12000;
 
-interface Props {
-  onResultados: (cards: TcgCard[], termo: string) => void;
-  onErro: (mensagem: string) => void;
-  /** IDs das coleções onde o usuário já tem cartas — aparecem primeiro. */
-  colecoesUsadas: string[];
-}
+const CACHE_SETS = 'tcgdex-sets-v1';
+const CACHE_TTL = 1000 * 60 * 60 * 24 * 7;
 
 /**
- * Cadastro por coleção + número impresso.
- *
- * O par identifica a carta exata dentro da expansão. A coleção escolhida
- * fica memorizada: cadastrar um maço inteiro vira digitar só os números.
+ * Cache local (por coleção) das cartas já vistas — chave de resiliência
+ * contra quedas da TCGdex (ver `umaTentativa`/`buscar` acima: a API já
+ * caiu por completo algumas vezes, com 502/503 em TODOS os endpoints,
+ * inclusive o site deles). Cartas publicadas não mudam, então o TTL é
+ * longo: o objetivo aqui não é manter dado fresco, é ter algo pra
+ * oferecer quando a rede simplesmente não responde.
  */
-export function BuscaPorNumero({ onResultados, onErro, colecoesUsadas }: Props) {
-  const [sets, setSets] = useState<TcgSet[]>([]);
-  const [filtro, setFiltro] = useState('');
-  const [setEscolhido, setSetEscolhido] = useState<TcgSet | null>(null);
-  const [trocando, setTrocando] = useState(false);
-  const [numero, setNumero] = useState('');
-  const [carregando, setCarregando] = useState(true);
-  const [falhou, setFalhou] = useState(false);
-  const [buscando, setBuscando] = useState(false);
+const CACHE_CARDS_PREFIX = 'tcgdex-cartas-v1:';
+const CACHE_CARDS_TTL = 1000 * 60 * 60 * 24 * 30;
 
-  useEffect(() => {
-    listarColecoes()
-      .then((lista) => {
-        setSets(lista);
-        const ultima = localStorage.getItem(CHAVE_ULTIMA);
-        const anterior = ultima ? lista.find((s) => s.id === ultima) : null;
-        if (anterior) {
-          setSetEscolhido(anterior);
-          aquecerCacheDaColecao(anterior.id);
-        }
-      })
-      .catch(() => setFalhou(true))
-      .finally(() => setCarregando(false));
-  }, [onErro]);
+async function cartasDaColecaoDoCache(setId: string): Promise<TcgCard[] | null> {
+  const cache = await get<{ at: number; cards: TcgCard[] }>(CACHE_CARDS_PREFIX + setId);
+  if (!cache?.cards.length) return null;
+  // TTL bem folgado — serve como último recurso, então preferimos dado
+  // velho a dado nenhum, mas não pra sempre.
+  if (Date.now() - cache.at > CACHE_CARDS_TTL) return null;
+  return cache.cards;
+}
 
-  function escolher(s: TcgSet) {
-    setSetEscolhido(s);
-    setTrocando(false);
-    setFiltro('');
-    localStorage.setItem(CHAVE_ULTIMA, s.id);
-    // Deixa o cache local dessa coleção pronto antes de precisar dele —
-    // se a TCGdex cair no meio da busca por número, ainda dá pra achar a
-    // carta no que já foi baixado aqui. Não bloqueia nada, falha em
-    // silêncio se não der.
-    aquecerCacheDaColecao(s.id);
+function salvarCartasDaColecaoNoCache(setId: string, cards: TcgCard[]) {
+  if (!cards.length) return;
+  idbSet(CACHE_CARDS_PREFIX + setId, { at: Date.now(), cards }).catch(() => undefined);
+}
+
+/** Formato bruto devolvido pela API. Campos opcionais são frequentes. */
+interface DexCard {
+  id: string;
+  localId: string | number;
+  name: string;
+  image?: string;
+  category?: string;
+  rarity?: string;
+  illustrator?: string;
+  hp?: number;
+  types?: string[];
+  dexId?: number[];
+  set?: DexSet;
+}
+
+interface DexSet {
+  id: string;
+  name: string;
+  logo?: string;
+  symbol?: string;
+  releaseDate?: string;
+  serie?: { id: string; name: string };
+  cardCount?: { official?: number; total?: number };
+  /** Sigla impressa no rodapé da carta (ex. "DRI") — só vem no detalhe do set. */
+  abbreviation?: { official?: string };
+}
+
+const TENTATIVAS = 3;
+/** Espera entre tentativas — cresce a cada retry (backoff exponencial simples). */
+const espera = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * A TCGdex falha de forma intermitente: além de 5xx explícitos, uma
+ * resposta de erro sem cabeçalho CORS (comum em páginas de erro de CDN)
+ * faz o navegador rejeitar a chamada com um TypeError genérico
+ * ("Failed to fetch") — sem status, sem corpo, indistinguível de "sem
+ * internet" para quem está usando o app. Por isso: (1) nunca mostramos
+ * essa frase crua na tela, e (2) tentamos de novo antes de desistir, já
+ * que na prática a maioria dessas falhas é passageira.
+ */
+async function umaTentativa<T>(caminho: string): Promise<T> {
+  const abortar = new AbortController();
+  const relogio = setTimeout(() => abortar.abort(), TIMEOUT_MS);
+
+  try {
+    const res = await fetch(`${BASE}${caminho}`, { signal: abortar.signal });
+    if (res.status === 404) throw new Error('NAO_ENCONTRADO');
+    if (!res.ok) throw new Error(`TCGDEX_${res.status}`);
+    return (await res.json()) as T;
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new Error('A API de cartas demorou demais para responder.');
+    }
+    if (err?.message === 'NAO_ENCONTRADO' || /^TCGDEX_/.test(err?.message ?? '')) {
+      throw err;
+    }
+    // TypeError "Failed to fetch" (ou similar) — falha de rede/CORS crua.
+    throw new Error('FALHA_REDE');
+  } finally {
+    clearTimeout(relogio);
   }
+}
 
-  const { minhas, outras } = useMemo(() => {
-    const termo = filtro.trim().toLowerCase();
-    const combina = (s: TcgSet) =>
-      !termo || `${s.name} ${s.series} ${s.id} ${s.ptcgoCode ?? ''}`.toLowerCase().includes(termo);
+async function buscar<T>(caminho: string): Promise<T> {
+  let ultimoErro: Error = new Error('A busca falhou. Verifique sua conexão.');
 
-    const usadas = new Set(colecoesUsadas);
-    const filtradas = sets.filter(combina);
-
-    return {
-      minhas: filtradas.filter((s) => usadas.has(s.id)),
-      outras: filtradas.filter((s) => !usadas.has(s.id)).slice(0, 40),
-    };
-  }, [sets, filtro, colecoesUsadas]);
-
-  async function buscar() {
-    if (!setEscolhido || !numero.trim()) return;
-    setBuscando(true);
+  for (let tentativa = 1; tentativa <= TENTATIVAS; tentativa++) {
     try {
-      const cards = await buscarPorNumero(setEscolhido.id, numero);
-      if (cards.length === 0) {
-        onErro(`Nenhuma carta ${numero} em ${setEscolhido.name}. Confira o número antes da barra.`);
-        return;
-      }
-      onResultados(cards, `${setEscolhido.name} ${numero}`);
-      setNumero('');
+      return await umaTentativa<T>(caminho);
     } catch (err: any) {
-      onErro(err?.message ?? 'A busca falhou.');
-    } finally {
-      setBuscando(false);
+      // Não vale repetir "não encontrado" — a carta não vai aparecer numa
+      // segunda tentativa.
+      if (err?.message === 'NAO_ENCONTRADO') throw err;
+
+      ultimoErro =
+        err?.message === 'FALHA_REDE'
+          ? new Error('Não consegui falar com a API de cartas. Verifique sua conexão e tente de novo.')
+          : /^TCGDEX_(\d+)$/.test(err?.message ?? '')
+            ? new Error(`A API de cartas respondeu com erro (${err.message.replace('TCGDEX_', '')}). Tente de novo em instantes.`)
+            : err;
+
+      const ultimaTentativa = tentativa === TENTATIVAS;
+      if (!ultimaTentativa) await espera(300 * tentativa);
     }
   }
 
-  if (carregando) {
-    return <p className="py-8 text-center text-sm text-mist">Carregando coleções…</p>;
-  }
-
-  if (falhou) {
-    return (
-      <div className="panel px-5 py-8 text-center">
-        <p className="font-display font-semibold">Não consegui carregar as coleções</p>
-        <p className="mt-1 text-sm text-mist">
-          A API de cartas não respondeu. Verifique sua conexão e tente novamente.
-        </p>
-        <button
-          onClick={() => location.reload()}
-          className="mt-4 rounded-xl bg-flame px-4 py-2 font-display text-sm font-bold"
-        >
-          Tentar de novo
-        </button>
-      </div>
-    );
-  }
-
-  const mostrandoLista = !setEscolhido || trocando;
-
-  if (mostrandoLista) {
-    return (
-      <div className="space-y-3">
-        <div className="relative">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-mist" />
-          <input
-            value={filtro}
-            onChange={(e) => setFiltro(e.target.value)}
-            placeholder="Sigla do rodapé (MEG) ou nome da coleção"
-            className="w-full rounded-xl border border-white/10 bg-ink-700 py-2.5 pl-9 pr-3 text-sm outline-none focus:border-flame/60"
-            autoFocus
-          />
-        </div>
-
-        <div className="max-h-[430px] space-y-4 overflow-y-auto pr-1">
-          {minhas.length > 0 && (
-            <Grupo titulo="Minhas coleções" sets={minhas} onEscolher={escolher} />
-          )}
-          {outras.length > 0 && (
-            <Grupo
-              titulo={minhas.length > 0 ? 'Outras coleções' : 'Todas as coleções'}
-              sets={outras}
-              onEscolher={escolher}
-            />
-          )}
-          {minhas.length === 0 && outras.length === 0 && (
-            <p className="py-8 text-center text-sm text-mist">Nenhuma coleção com esse nome.</p>
-          )}
-        </div>
-
-        {setEscolhido && (
-          <button
-            onClick={() => { setTrocando(false); setFiltro(''); }}
-            className="w-full text-center text-xs text-mist hover:text-white"
-          >
-            Cancelar e voltar para {setEscolhido.name}
-          </button>
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-4">
-      <button
-        onClick={() => setTrocando(true)}
-        className="flex w-full items-center gap-3 rounded-xl border border-flame/50 bg-flame/10 p-2.5 text-left"
-      >
-        <img src={setEscolhido.logo} alt="" className="h-8 w-14 shrink-0 object-contain" />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-semibold">{setEscolhido.name}</span>
-          <span className="block text-[11px] text-mist">Toque para trocar de coleção</span>
-        </span>
-      </button>
-
-      <div>
-        <label className="mb-1.5 block text-[11px] uppercase tracking-wider text-mist">
-          Número impresso no rodapé
-        </label>
-        <div className="flex gap-2">
-          <input
-            value={numero}
-            onChange={(e) => setNumero(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && buscar()}
-            inputMode="numeric"
-            placeholder="001"
-            className="flex-1 rounded-xl border border-white/10 bg-ink-700 px-3 py-3 text-center font-dex text-2xl outline-none focus:border-flame/60"
-            autoFocus
-          />
-          <button
-            onClick={buscar}
-            disabled={buscando || !numero.trim()}
-            className="rounded-xl bg-flame px-5 font-display font-bold transition hover:bg-flame-soft disabled:opacity-40"
-          >
-            {buscando ? '…' : 'Buscar'}
-          </button>
-        </div>
-        <p className="mt-1.5 text-[11px] text-mist">
-          Só a parte antes da barra. Em <b>001/132</b>, digite <b>001</b>.
-        </p>
-      </div>
-    </div>
-  );
+  throw ultimoErro;
 }
 
-function Grupo({
-  titulo, sets, onEscolher,
-}: { titulo: string; sets: TcgSet[]; onEscolher: (s: TcgSet) => void }) {
-  return (
-    <section>
-      <h3 className="mb-1.5 text-[11px] uppercase tracking-wider text-mist">{titulo}</h3>
-      <ul className="space-y-1.5">
-        {sets.map((s) => (
-          <li key={s.id}>
-            <button
-              onClick={() => onEscolher(s)}
-              className="flex w-full items-center gap-3 rounded-xl border border-white/10 bg-ink-700 p-2.5 text-left transition hover:border-flame/60"
-            >
-              <img src={s.logo} alt="" className="h-8 w-14 shrink-0 object-contain" loading="lazy" />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-semibold">{s.name}</span>
-                <span className="block truncate text-[11px] text-mist">
-                  {s.id.toUpperCase()} · {s.printedTotal} cartas{s.releaseDate ? ` · ${s.releaseDate}` : ''}
-                </span>
-              </span>
-            </button>
-          </li>
-        ))}
-      </ul>
-    </section>
+/**
+ * Imagens vêm como URL base, sem extensão. Cartas pedem qualidade +
+ * extensão (/high.webp); logos e símbolos pedem só a extensão (.webp).
+ */
+const imagemCarta = (base: string | undefined, qualidade: 'high' | 'low') =>
+  base ? `${base}/${qualidade}.webp` : '';
+
+const imagemSet = (base?: string) => (base ? `${base}.webp` : '');
+
+/** Converte para o formato que o app já consome. */
+function adaptarCarta(card: DexCard): TcgCard {
+  const total = card.set?.cardCount?.official ?? card.set?.cardCount?.total ?? 0;
+
+  return {
+    id: card.id,
+    name: card.name,
+    number: String(card.localId),
+    rarity: card.rarity,
+    artist: card.illustrator,
+    hp: card.hp != null ? String(card.hp) : undefined,
+    types: card.types,
+    images: {
+      small: imagemCarta(card.image, 'low'),
+      large: imagemCarta(card.image, 'high'),
+    },
+    set: {
+      id: card.set?.id ?? '',
+      name: card.set?.name ?? '',
+      series: card.set?.serie?.name ?? '',
+      printedTotal: total,
+      total,
+      releaseDate: card.set?.releaseDate ?? '',
+      images: { symbol: imagemSet(card.set?.symbol), logo: imagemSet(card.set?.logo) },
+    },
+    nationalPokedexNumbers: card.dexId,
+  };
+}
+
+/**
+ * Leitura direta de uma carta específica (coleção + número). É o único
+ * endpoint da TCGdex que devolve o card COMPLETO — incluindo `dexId`
+ * (número da Pokédex nacional). A lista resumida de `/sets/{id}` não tem
+ * esse campo; ver `hidratarCartas` abaixo.
+ */
+async function buscarCartaCompleta(setId: string, numero: string | number): Promise<TcgCard | null> {
+  try {
+    const card = await buscar<DexCard>(`/cards/${setId}-${numero}`);
+    return adaptarCarta(card);
+  } catch (err: any) {
+    if (err?.message === 'NAO_ENCONTRADO') return null;
+
+    // A TCGdex já caiu por inteiro algumas vezes (502/503 em tudo, até no
+    // site deles) — nesses casos, se essa coleção já foi vista antes
+    // (nome dela buscado, ou alguém escolheu ela na busca por número —
+    // ver `aquecerCacheDaColecao`), tentamos achar a carta no cache local
+    // em vez de deixar a pessoa sem conseguir cadastrar nada.
+    const cache = await cartasDaColecaoDoCache(setId);
+    const achada = cache?.find((c) => c.number === String(numero));
+    if (achada) return achada;
+
+    throw err;
+  }
+}
+
+/**
+ * Chamada em segundo plano assim que a pessoa escolhe uma coleção — sem
+ * bloquear a tela nem repassar erro pra ninguém. Só existe pra deixar o
+ * cache local (ver `cartasDaColecaoDoCache`) pronto ANTES de precisar
+ * dele, então uma queda da TCGdex durante a busca por número não deixa
+ * a pessoa na mão se ela já tiver aberto essa coleção antes.
+ */
+export function aquecerCacheDaColecao(setId: string) {
+  cartasDaColecao(setId).catch(() => undefined);
+}
+
+/**
+ * Identificação exata: coleção + número impresso.
+ * O id de uma carta na TCGdex é {coleção}-{número}, então isto é uma
+ * leitura direta — sem consulta, sem sintaxe, sem erro 500.
+ *
+ * O formato do número varia por coleção: sets mais antigos (ex. swsh1,
+ * sm1, bw1) usam o número sem zeros à esquerda ("1"), enquanto sets mais
+ * recentes (ex. sv01, sv10) mantêm o zero à esquerda tal como impresso
+ * ("001", "070"). A pessoa pode digitar de qualquer um dos dois jeitos —
+ * "70" para uma carta cujo id é "070", ou "070" para uma cujo id é "70" —
+ * então tentamos o que foi digitado, sem zeros à esquerda, e também
+ * preenchido com zeros à esquerda até as larguras mais comuns (2, 3 e 4
+ * dígitos) antes de desistir.
+ */
+export async function buscarPorNumero(setId: string, numero: string): Promise<TcgCard[]> {
+  const digitado = numero.trim();
+  if (!setId || !digitado) return [];
+
+  const tentativas = [digitado];
+  if (/^\d+$/.test(digitado)) {
+    const semZeros = digitado.replace(/^0+(?=\d)/, '');
+    tentativas.push(semZeros, semZeros.padStart(2, '0'), semZeros.padStart(3, '0'), semZeros.padStart(4, '0'));
+  }
+
+  for (const tentativa of new Set(tentativas)) {
+    const card = await buscarCartaCompleta(setId, tentativa);
+    if (card) return [card];
+  }
+  return [];
+}
+
+/** Todas as cartas de uma coleção — usado para buscar pelo nome dentro dela. */
+export async function cartasDaColecao(setId: string): Promise<TcgCard[]> {
+  try {
+    const dados = await buscar<DexSet & { cards?: DexCard[] }>(`/sets/${setId}`);
+    const cards = dados.cards ?? [];
+    // A lista resumida não traz os dados da coleção em cada carta.
+    const adaptadas = cards.map((c) => adaptarCarta({ ...c, set: dados }));
+    salvarCartasDaColecaoNoCache(setId, adaptadas);
+    return adaptadas;
+  } catch (err) {
+    // Mesma lógica de `buscarCartaCompleta`: sem rede, cai pro que já foi
+    // visto antes dessa coleção em vez de devolver a tela vazia.
+    const cache = await cartasDaColecaoDoCache(setId);
+    if (cache) return cache;
+    throw err;
+  }
+}
+
+/**
+ * A lista resumida de `/sets/{id}` (usada pela busca por nome) não traz
+ * `dexId` — sem isso, `toOwnedCard` grava `pokedexId: 0` e a carta nunca
+ * aparece na página do Pokémon, mesmo entrando na coleção. Depois de
+ * filtrar os resultados por nome, hidrata cada um com o card completo
+ * (`/cards/{coleção}-{número}`) para recuperar o `dexId` antes de exibir
+ * ou salvar. Só hidrata os resultados já filtrados — não a coleção
+ * inteira — então o custo extra é de poucas chamadas, não centenas.
+ */
+export async function hidratarCartas(cards: TcgCard[]): Promise<TcgCard[]> {
+  const hidratadas = await Promise.all(
+    cards.map(async (c) => (await buscarCartaCompleta(c.set.id, c.number)) ?? c),
   );
+  return hidratadas;
+}
+
+/**
+ * Lista de coleções.
+ *
+ * Ordem de prioridade, da mais rápida para a mais lenta:
+ *   1. Lista embutida no pacote (scripts/baixar-colecoes.mjs) — instantânea
+ *   2. Cache local de uma busca anterior
+ *   3. Rede
+ *
+ * Como a lista embutida é regravada a cada build, ela só fica velha se
+ * você passar meses sem publicar — e mesmo assim a atualização em segundo
+ * plano corrige na primeira abertura com internet.
+ */
+export async function listarColecoes(): Promise<TcgSet[]> {
+  const embutidas = colecoesEmbutidas as TcgSet[];
+
+  if (embutidas.length > 0) {
+    atualizarEmSegundoPlano();
+    return embutidas;
+  }
+
+  const cache = await get<{ at: number; sets: TcgSet[] }>(CACHE_SETS);
+  if (cache?.sets.length) {
+    atualizarEmSegundoPlano();
+    return cache.sets;
+  }
+
+  return baixarColecoes();
+}
+
+/** Busca coleções novas sem segurar a tela. Falha em silêncio de propósito. */
+function atualizarEmSegundoPlano() {
+  get<{ at: number }>(CACHE_SETS).then((cache) => {
+    if (cache && Date.now() - cache.at < CACHE_TTL) return;
+    baixarColecoes().catch(() => undefined);
+  });
+}
+
+/**
+ * A lista resumida (/sets) não traz a sigla impressa no rodapé da carta
+ * (ex. "DRI") — só o detalhe de cada set tem isso (abbreviation.official).
+ * Este é o caminho de rede, usado só quando a lista embutida no pacote e o
+ * cache local falharam — por isso vale buscar as siglas mesmo custando uma
+ * chamada extra por coleção, com concorrência limitada.
+ */
+async function buscarSigla(id: string): Promise<string | undefined> {
+  try {
+    const detalhe = await buscar<DexSet>(`/sets/${id}`);
+    return detalhe.abbreviation?.official;
+  } catch {
+    return undefined;
+  }
+}
+
+async function baixarColecoes(): Promise<TcgSet[]> {
+  const brutos = await buscar<DexSet[]>('/sets');
+
+  const CONCORRENCIA = 8;
+  const siglas: (string | undefined)[] = new Array(brutos.length);
+  let indice = 0;
+  async function trabalhador() {
+    while (indice < brutos.length) {
+      const meu = indice++;
+      siglas[meu] = await buscarSigla(brutos[meu].id);
+    }
+  }
+  await Promise.all(Array.from({ length: CONCORRENCIA }, trabalhador));
+
+  const sets: TcgSet[] = brutos
+    .map((s, i) => ({
+      id: s.id,
+      name: s.name,
+      series: s.serie?.name ?? '',
+      ptcgoCode: siglas[i],
+      total: s.cardCount?.total ?? s.cardCount?.official ?? 0,
+      printedTotal: s.cardCount?.official ?? s.cardCount?.total ?? 0,
+      releaseDate: s.releaseDate ?? '',
+      logo: imagemSet(s.logo),
+      symbol: imagemSet(s.symbol),
+    }))
+    .sort((a, b) => (b.releaseDate ?? '').localeCompare(a.releaseDate ?? ''));
+
+  await idbSet(CACHE_SETS, { at: Date.now(), sets });
+  return sets;
 }
