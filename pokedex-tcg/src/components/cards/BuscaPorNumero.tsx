@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
-import { buscarPorNumero, listarColecoes } from '@/services/tcgdex';
+import { aquecerCacheDaColecao, buscarPorNumero, listarColecoes } from '@/services/tcgdex';
 import type { TcgCard } from '@/services/tcgapi';
 import type { TcgSet } from '@/types';
 
@@ -36,7 +36,10 @@ export function BuscaPorNumero({ onResultados, onErro, colecoesUsadas }: Props) 
         setSets(lista);
         const ultima = localStorage.getItem(CHAVE_ULTIMA);
         const anterior = ultima ? lista.find((s) => s.id === ultima) : null;
-        if (anterior) setSetEscolhido(anterior);
+        if (anterior) {
+          setSetEscolhido(anterior);
+          aquecerCacheDaColecao(anterior.id);
+        }
       })
       .catch(() => setFalhou(true))
       .finally(() => setCarregando(false));
@@ -47,6 +50,11 @@ export function BuscaPorNumero({ onResultados, onErro, colecoesUsadas }: Props) 
     setTrocando(false);
     setFiltro('');
     localStorage.setItem(CHAVE_ULTIMA, s.id);
+    // Deixa o cache local dessa coleção pronto antes de precisar dele —
+    // se a TCGdex cair no meio da busca por número, ainda dá pra achar a
+    // carta no que já foi baixado aqui. Não bloqueia nada, falha em
+    // silêncio se não der.
+    aquecerCacheDaColecao(s.id);
   }
 
   const { minhas, outras } = useMemo(() => {
