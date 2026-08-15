@@ -54,23 +54,66 @@ interface DexSet {
   abbreviation?: { official?: string };
 }
 
-async function buscar<T>(caminho: string): Promise<T> {
+const TENTATIVAS = 3;
+/** Espera entre tentativas — cresce a cada retry (backoff exponencial simples). */
+const espera = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * A TCGdex falha de forma intermitente: além de 5xx explícitos, uma
+ * resposta de erro sem cabeçalho CORS (comum em páginas de erro de CDN)
+ * faz o navegador rejeitar a chamada com um TypeError genérico
+ * ("Failed to fetch") — sem status, sem corpo, indistinguível de "sem
+ * internet" para quem está usando o app. Por isso: (1) nunca mostramos
+ * essa frase crua na tela, e (2) tentamos de novo antes de desistir, já
+ * que na prática a maioria dessas falhas é passageira.
+ */
+async function umaTentativa<T>(caminho: string): Promise<T> {
   const abortar = new AbortController();
   const relogio = setTimeout(() => abortar.abort(), TIMEOUT_MS);
 
   try {
     const res = await fetch(`${BASE}${caminho}`, { signal: abortar.signal });
     if (res.status === 404) throw new Error('NAO_ENCONTRADO');
-    if (!res.ok) throw new Error(`TCGdex respondeu ${res.status}.`);
+    if (!res.ok) throw new Error(`TCGDEX_${res.status}`);
     return (await res.json()) as T;
   } catch (err: any) {
     if (err?.name === 'AbortError') {
       throw new Error('A API de cartas demorou demais para responder.');
     }
-    throw err;
+    if (err?.message === 'NAO_ENCONTRADO' || /^TCGDEX_/.test(err?.message ?? '')) {
+      throw err;
+    }
+    // TypeError "Failed to fetch" (ou similar) — falha de rede/CORS crua.
+    throw new Error('FALHA_REDE');
   } finally {
     clearTimeout(relogio);
   }
+}
+
+async function buscar<T>(caminho: string): Promise<T> {
+  let ultimoErro: Error = new Error('A busca falhou. Verifique sua conexão.');
+
+  for (let tentativa = 1; tentativa <= TENTATIVAS; tentativa++) {
+    try {
+      return await umaTentativa<T>(caminho);
+    } catch (err: any) {
+      // Não vale repetir "não encontrado" — a carta não vai aparecer numa
+      // segunda tentativa.
+      if (err?.message === 'NAO_ENCONTRADO') throw err;
+
+      ultimoErro =
+        err?.message === 'FALHA_REDE'
+          ? new Error('Não consegui falar com a API de cartas. Verifique sua conexão e tente de novo.')
+          : /^TCGDEX_(\d+)$/.test(err?.message ?? '')
+            ? new Error(`A API de cartas respondeu com erro (${err.message.replace('TCGDEX_', '')}). Tente de novo em instantes.`)
+            : err;
+
+      const ultimaTentativa = tentativa === TENTATIVAS;
+      if (!ultimaTentativa) await espera(300 * tentativa);
+    }
+  }
+
+  throw ultimoErro;
 }
 
 /**
